@@ -299,12 +299,14 @@ app.prepare().then(() => {
       socket.emit("file-room-data", {
         file: roomData.file,
         userCount: roomData.users.size,
+        users: Array.from(roomData.users.values()),
         userInfo,
       });
 
       socket.to(roomId).emit("user-joined", {
         user: userInfo,
         userCount: roomData.users.size,
+        users: Array.from(roomData.users.values()),
       });
 
       console.log(`User ${userInfo.name} joined file room ${roomId}. Users: ${roomData.users.size}`);
@@ -338,11 +340,11 @@ app.prepare().then(() => {
         const roomData = rooms.get(currentRoom)!;
         roomData.users.delete(socket.id);
 
-        socket.to(currentRoom).emit("user-left", {
-          oderId: socket.id,
-          users: Array.from(roomData.users.values()),
-          userCount: roomData.users.size,
-        });
+        const userData = roomData.type === "code"
+          ? { oderId: socket.id, users: Array.from(roomData.users.values()) }
+          : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
+
+        socket.to(currentRoom).emit("user-left", userData);
 
         // Delete empty rooms after 5 minutes
         if (roomData.users.size === 0) {

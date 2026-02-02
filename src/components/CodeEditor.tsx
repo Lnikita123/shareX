@@ -138,6 +138,8 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
   const [copied, setCopied] = useState<boolean>(false);
   const [showChat, setShowChat] = useState<boolean>(false);
   const [showVideoCall, setShowVideoCall] = useState<boolean>(false);
+  const [incomingCall, setIncomingCall] = useState<{ fromId: string; fromName: string; type: "audio" | "video" } | null>(null);
+  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [output, setOutput] = useState<string>("");
   const [showOutput, setShowOutput] = useState<boolean>(false);
@@ -233,6 +235,37 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       }
     });
 
+    // Handle incoming call - this needs to be in parent component
+    // so users can receive calls even when VideoCall modal is closed
+    socket.on("incoming-call", (data: { fromId: string; fromName: string; type: "audio" | "video" }) => {
+      setIncomingCall(data);
+      setShowVideoCall(true); // Auto-open video call modal
+
+      // Play ringtone
+      if (ringtoneRef.current) {
+        ringtoneRef.current.play().catch(err => console.log("Ringtone play failed:", err));
+      }
+
+      // Request browser notification permission and show notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`Incoming ${data.type} call from ${data.fromName}`, {
+          body: `${data.fromName} is calling you...`,
+          icon: '/favicon.ico',
+          tag: 'incoming-call',
+        });
+      } else if ('Notification' in window && Notification.permission !== 'denied') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            new Notification(`Incoming ${data.type} call from ${data.fromName}`, {
+              body: `${data.fromName} is calling you...`,
+              icon: '/favicon.ico',
+              tag: 'incoming-call',
+            });
+          }
+        });
+      }
+    });
+
     return () => {
       socket.off("connect");
       socket.off("disconnect");
@@ -246,8 +279,57 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       socket.off("cursor-update");
       socket.off("selection-update");
       socket.off("new-message");
+      socket.off("incoming-call");
     };
   }, [roomId, showChat]);
+
+  // Set up ringtone for incoming calls
+  useEffect(() => {
+    // Create a simple ringtone using Web Audio API
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.frequency.value = 440; // A4 note
+    oscillator.type = 'sine';
+    gainNode.gain.value = 0.3;
+
+    // Store reference for cleanup
+    const playRingtone = () => {
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+      oscillator.start();
+      setTimeout(() => oscillator.stop(), 2000); // Ring for 2 seconds
+    };
+
+    // Create an Audio element for ringtone (alternative approach using data URL)
+    const audio = new Audio();
+    // Using a simple beep data URL
+    audio.src = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjSG0fPTgjMGHm7A7+OZUQ0MW";
+    audio.loop = true;
+    audio.volume = 0.5;
+
+    ringtoneRef.current = audio;
+
+    return () => {
+      if (ringtoneRef.current) {
+        ringtoneRef.current.pause();
+        ringtoneRef.current = null;
+      }
+    };
+  }, []);
+
+  // Stop ringtone when video call is closed or answered
+  useEffect(() => {
+    if (!showVideoCall && ringtoneRef.current) {
+      ringtoneRef.current.pause();
+      ringtoneRef.current.currentTime = 0;
+    }
+  }, [showVideoCall]);
 
   const updateRemoteCursor = (userId: string, cursor: { lineNumber: number; column: number }, userName: string, userColor: string) => {
     if (!editorRef.current || !monacoRef.current) return;
@@ -797,7 +879,16 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
           roomId={roomId}
           currentUserId={userInfo.id}
           users={users}
-          onClose={() => setShowVideoCall(false)}
+          onClose={() => {
+            setShowVideoCall(false);
+            setIncomingCall(null);
+            if (ringtoneRef.current) {
+              ringtoneRef.current.pause();
+              ringtoneRef.current.currentTime = 0;
+            }
+          }}
+          initialIncomingCall={incomingCall}
+          onCallHandled={() => setIncomingCall(null)}
         />
       )}
 

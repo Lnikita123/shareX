@@ -15,6 +15,8 @@ interface VideoCallProps {
   currentUserId: string;
   users: UserInfo[];
   onClose: () => void;
+  initialIncomingCall?: { fromId: string; fromName: string; type: "audio" | "video" } | null;
+  onCallHandled?: () => void;
 }
 
 const iceServers = {
@@ -24,7 +26,7 @@ const iceServers = {
   ],
 };
 
-export default function VideoCall({ socket, roomId, currentUserId, users, onClose }: VideoCallProps) {
+export default function VideoCall({ socket, roomId, currentUserId, users, onClose, initialIncomingCall, onCallHandled }: VideoCallProps) {
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [callStatus, setCallStatus] = useState<"idle" | "calling" | "incoming" | "connected">("idle");
@@ -108,6 +110,16 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     return pc;
   }, [socket, roomId, cleanup]);
 
+  // Handle initial incoming call from parent (when modal opens with a call)
+  useEffect(() => {
+    if (initialIncomingCall) {
+      setRemoteUserId(initialIncomingCall.fromId);
+      setRemoteUserName(initialIncomingCall.fromName);
+      setIncomingCallType(initialIncomingCall.type);
+      setCallStatus("incoming");
+    }
+  }, [initialIncomingCall]);
+
   const handleIncomingCall = useCallback((data: { fromId: string; fromName: string; type: "audio" | "video" }) => {
     setRemoteUserId(data.fromId);
     setRemoteUserName(data.fromName);
@@ -176,7 +188,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     startLocalStream();
 
     // Socket event handlers
-    socket.on("incoming-call", handleIncomingCall);
+    // Note: "incoming-call" is now handled in parent CodeEditor component
     socket.on("call-accepted", handleCallAccepted);
     socket.on("call-rejected", handleCallRejected);
     socket.on("call-ended", handleCallEnded);
@@ -186,7 +198,6 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
 
     return () => {
       cleanup();
-      socket.off("incoming-call", handleIncomingCall);
       socket.off("call-accepted", handleCallAccepted);
       socket.off("call-rejected", handleCallRejected);
       socket.off("call-ended", handleCallEnded);
@@ -194,7 +205,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       socket.off("webrtc-answer", handleAnswer);
       socket.off("webrtc-ice-candidate", handleIceCandidate);
     };
-  }, [socket, startLocalStream, cleanup, handleIncomingCall, handleCallAccepted, handleCallRejected, handleCallEnded, handleOffer, handleAnswer, handleIceCandidate]);
+  }, [socket, startLocalStream, cleanup, handleCallAccepted, handleCallRejected, handleCallEnded, handleOffer, handleAnswer, handleIceCandidate]);
 
   const callUser = async (targetId: string, type: "audio" | "video") => {
     const user = users.find((u) => u.id === targetId);
@@ -213,6 +224,11 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     createPeerConnection();
     socket.emit("call-accepted", { roomId, targetId: remoteUserId });
     setCallStatus("connected");
+
+    // Notify parent that call was handled
+    if (onCallHandled) {
+      onCallHandled();
+    }
   };
 
   const rejectCall = () => {
@@ -221,6 +237,11 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     }
     setCallStatus("idle");
     setRemoteUserId(null);
+
+    // Notify parent that call was handled
+    if (onCallHandled) {
+      onCallHandled();
+    }
   };
 
   const endCall = () => {

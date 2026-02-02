@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getSocket } from "@/lib/socket";
 import type { Socket } from "socket.io-client";
+import dynamic from "next/dynamic";
+
+const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
 
 interface FileShareProps {
   roomId: string;
@@ -14,6 +17,12 @@ interface FileData {
   type: string;
   data: string;
   uploadedAt: number;
+}
+
+interface UserInfo {
+  id: string;
+  name: string;
+  color: string;
 }
 
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
@@ -33,8 +42,13 @@ export default function FileShare({ roomId }: FileShareProps) {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [showVideoCall, setShowVideoCall] = useState<boolean>(false);
+  const [incomingCall, setIncomingCall] = useState<{ fromId: string; fromName: string; type: "audio" | "video" } | null>(null);
+  const [users, setUsers] = useState<UserInfo[]>([]);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     const socket = getSocket();
@@ -49,9 +63,10 @@ export default function FileShare({ roomId }: FileShareProps) {
       setIsConnected(false);
     });
 
-    socket.on("file-room-data", (data: { file: FileData | null; userCount: number }) => {
+    socket.on("file-room-data", (data: { file: FileData | null; userCount: number; userInfo: UserInfo }) => {
       setFile(data.file);
       setUserCount(data.userCount);
+      setUserInfo(data.userInfo);
     });
 
     socket.on("file-update", (data: { file: FileData }) => {
@@ -66,8 +81,45 @@ export default function FileShare({ roomId }: FileShareProps) {
       setUserCount(data.userCount);
     });
 
-    socket.on("user-left", (data: { userCount: number }) => {
+    socket.on("user-left", (data: { userCount: number; users: UserInfo[] }) => {
       setUserCount(data.userCount);
+      if (data.users) {
+        setUsers(data.users);
+      }
+    });
+
+    socket.on("users-update", (data: { users: UserInfo[] }) => {
+      setUsers(data.users);
+    });
+
+    // Handle incoming call
+    socket.on("incoming-call", (data: { fromId: string; fromName: string; type: "audio" | "video" }) => {
+      setIncomingCall(data);
+      setShowVideoCall(true);
+
+      // Play ringtone
+      if (ringtoneRef.current) {
+        ringtoneRef.current.play().catch(err => console.log("Ringtone play failed:", err));
+      }
+
+      // Request browser notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`Incoming ${data.type} call from ${data.fromName}`, {
+          body: `${data.fromName} is calling you...`,
+          icon: '/favicon.ico',
+          tag: 'incoming-call',
+        });
+      } else if ('Notification' in window && Notification.permission !== 'denied') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            new Notification(`Incoming ${data.type} call from ${data.fromName}`, {
+              body: `${data.fromName} is calling you...`,
+              icon: '/favicon.ico',
+              tag: 'incoming-call',
+            });
+          }
+        });
+      }
     });
 
     return () => {
@@ -78,8 +130,34 @@ export default function FileShare({ roomId }: FileShareProps) {
       socket.off("file-removed");
       socket.off("user-joined");
       socket.off("user-left");
+      socket.off("users-update");
+      socket.off("incoming-call");
     };
   }, [roomId]);
+
+  // Set up ringtone for incoming calls
+  useEffect(() => {
+    const audio = new Audio();
+    audio.src = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjSG0fPTgjMGHm7A7+OZUQ0MW";
+    audio.loop = true;
+    audio.volume = 0.5;
+    ringtoneRef.current = audio;
+
+    return () => {
+      if (ringtoneRef.current) {
+        ringtoneRef.current.pause();
+        ringtoneRef.current = null;
+      }
+    };
+  }, []);
+
+  // Stop ringtone when video call is closed
+  useEffect(() => {
+    if (!showVideoCall && ringtoneRef.current) {
+      ringtoneRef.current.pause();
+      ringtoneRef.current.currentTime = 0;
+    }
+  }, [showVideoCall]);
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setError(null);
@@ -255,6 +333,17 @@ export default function FileShare({ roomId }: FileShareProps) {
             <span className="text-sm text-gray-300">{userCount}</span>
           </div>
 
+          {/* Video Call */}
+          <button
+            onClick={() => setShowVideoCall(true)}
+            className="p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
+            title="Video Call"
+          >
+            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+
           {/* Share */}
           <button
             onClick={copyShareLink}
@@ -395,6 +484,26 @@ export default function FileShare({ roomId }: FileShareProps) {
           {file ? `${file.name} (${formatSize(file.size)})` : "No file uploaded"}
         </div>
       </footer>
+
+      {/* Video Call Modal */}
+      {showVideoCall && socketRef.current && userInfo && (
+        <VideoCall
+          socket={socketRef.current}
+          roomId={roomId}
+          currentUserId={userInfo.id}
+          users={users}
+          onClose={() => {
+            setShowVideoCall(false);
+            setIncomingCall(null);
+            if (ringtoneRef.current) {
+              ringtoneRef.current.pause();
+              ringtoneRef.current.currentTime = 0;
+            }
+          }}
+          initialIncomingCall={incomingCall}
+          onCallHandled={() => setIncomingCall(null)}
+        />
+      )}
     </div>
   );
 }

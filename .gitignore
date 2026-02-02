@@ -39,3 +39,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+VIDEO_CALL_FIX_SUMMARY.md
+QUICK_START_GUIDE.md
