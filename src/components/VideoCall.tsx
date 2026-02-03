@@ -32,7 +32,9 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   const [callStatus, setCallStatus] = useState<"idle" | "calling" | "incoming" | "connected">("idle");
   const [remoteUserId, setRemoteUserId] = useState<string | null>(null);
   const [remoteUserName, setRemoteUserName] = useState<string>("");
-  const [incomingCallType, setIncomingCallType] = useState<"audio" | "video">("video");
+  const [currentCallType, setCurrentCallType] = useState<"audio" | "video">("video");
+  const [isStreamReady, setIsStreamReady] = useState(false);
+  const [isAccepting, setIsAccepting] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -54,20 +56,29 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     }
+    setIsStreamReady(false);
+    setIsAccepting(false);
   }, []);
 
-  const startLocalStream = useCallback(async () => {
+  const startLocalStream = useCallback(async (callType: "audio" | "video") => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      setIsStreamReady(false);
+      const constraints = callType === "video"
+        ? { video: true, audio: true }
+        : { video: false, audio: true };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       localStreamRef.current = stream;
-      if (localVideoRef.current) {
+      if (localVideoRef.current && callType === "video") {
         localVideoRef.current.srcObject = stream;
       }
+      setIsStreamReady(true);
+      return stream;
     } catch (error) {
       console.error("Error accessing media devices:", error);
+      setIsStreamReady(false);
+      alert("Failed to access camera/microphone. Please allow permissions and try again.");
+      throw error;
     }
   }, []);
 
@@ -115,20 +126,50 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     if (initialIncomingCall) {
       setRemoteUserId(initialIncomingCall.fromId);
       setRemoteUserName(initialIncomingCall.fromName);
-      setIncomingCallType(initialIncomingCall.type);
+      setCurrentCallType(initialIncomingCall.type);
       setCallStatus("incoming");
+
+      // Start local stream immediately for incoming call
+      const initStream = async () => {
+        try {
+          await startLocalStream(initialIncomingCall.type);
+        } catch (error) {
+          console.error("Failed to start stream:", error);
+        }
+      };
+      initStream();
     }
-  }, [initialIncomingCall]);
+  }, [initialIncomingCall, startLocalStream]);
 
   const handleIncomingCall = useCallback((data: { fromId: string; fromName: string; type: "audio" | "video" }) => {
     setRemoteUserId(data.fromId);
     setRemoteUserName(data.fromName);
-    setIncomingCallType(data.type);
+    setCurrentCallType(data.type);
     setCallStatus("incoming");
-  }, []);
+
+    // Start local stream immediately for incoming call
+    const initStream = async () => {
+      try {
+        await startLocalStream(data.type);
+      } catch (error) {
+        console.error("Failed to start stream:", error);
+      }
+    };
+    initStream();
+  }, [startLocalStream]);
 
   const handleCallAccepted = useCallback(async () => {
     if (!remoteUserIdRef.current) return;
+
+    // Ensure local stream is ready before creating peer connection
+    if (!localStreamRef.current) {
+      try {
+        await startLocalStream(currentCallType);
+      } catch (error) {
+        console.error("Failed to start local stream:", error);
+        return;
+      }
+    }
 
     const pc = createPeerConnection();
     const offer = await pc.createOffer();
@@ -139,12 +180,13 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       targetId: remoteUserIdRef.current,
       offer,
     });
-  }, [createPeerConnection, socket, roomId]);
+  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType]);
 
   const handleCallRejected = useCallback(() => {
+    cleanup();
     setCallStatus("idle");
     setRemoteUserId(null);
-  }, []);
+  }, [cleanup]);
 
   const handleCallEnded = useCallback(() => {
     cleanup();
@@ -153,6 +195,16 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   }, [cleanup]);
 
   const handleOffer = useCallback(async (data: { fromId: string; fromName: string; offer: RTCSessionDescriptionInit }) => {
+    // Ensure local stream is ready before creating peer connection
+    if (!localStreamRef.current) {
+      try {
+        await startLocalStream(currentCallType);
+      } catch (error) {
+        console.error("Failed to start local stream:", error);
+        return;
+      }
+    }
+
     if (!peerConnectionRef.current) {
       createPeerConnection();
     }
@@ -167,7 +219,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       targetId: data.fromId,
       answer,
     });
-  }, [createPeerConnection, socket, roomId]);
+  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType]);
 
   const handleAnswer = useCallback(async (data: { fromId: string; answer: RTCSessionDescriptionInit }) => {
     const pc = peerConnectionRef.current;
@@ -184,11 +236,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   }, []);
 
   useEffect(() => {
-    // Start local stream
-    startLocalStream();
-
     // Socket event handlers
-    // Note: "incoming-call" is now handled in parent CodeEditor component
     socket.on("call-accepted", handleCallAccepted);
     socket.on("call-rejected", handleCallRejected);
     socket.on("call-ended", handleCallEnded);
@@ -205,11 +253,21 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       socket.off("webrtc-answer", handleAnswer);
       socket.off("webrtc-ice-candidate", handleIceCandidate);
     };
-  }, [socket, startLocalStream, cleanup, handleCallAccepted, handleCallRejected, handleCallEnded, handleOffer, handleAnswer, handleIceCandidate]);
+  }, [socket, cleanup, handleCallAccepted, handleCallRejected, handleCallEnded, handleOffer, handleAnswer, handleIceCandidate]);
 
   const callUser = async (targetId: string, type: "audio" | "video") => {
     const user = users.find((u) => u.id === targetId);
     if (!user) return;
+
+    setCurrentCallType(type);
+
+    // Start local stream before calling
+    try {
+      await startLocalStream(type);
+    } catch (error) {
+      console.error("Failed to start local stream:", error);
+      return;
+    }
 
     setRemoteUserId(targetId);
     setRemoteUserName(user.name);
@@ -219,15 +277,34 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   };
 
   const acceptCall = async () => {
-    if (!remoteUserId) return;
+    if (!remoteUserId || isAccepting) return;
 
-    createPeerConnection();
-    socket.emit("call-accepted", { roomId, targetId: remoteUserId });
-    setCallStatus("connected");
+    try {
+      setIsAccepting(true);
 
-    // Notify parent that call was handled
-    if (onCallHandled) {
-      onCallHandled();
+      // Ensure local stream is ready before creating peer connection
+      if (!localStreamRef.current || !isStreamReady) {
+        console.log("Starting local stream...");
+        await startLocalStream(currentCallType);
+      }
+
+      console.log("Creating peer connection...");
+      createPeerConnection();
+
+      console.log("Emitting call-accepted...");
+      socket.emit("call-accepted", { roomId, targetId: remoteUserId });
+
+      setCallStatus("connected");
+
+      // Notify parent that call was handled
+      if (onCallHandled) {
+        onCallHandled();
+      }
+    } catch (error) {
+      console.error("Failed to accept call:", error);
+      alert("Failed to accept call. Please check your permissions and try again.");
+    } finally {
+      setIsAccepting(false);
     }
   };
 
@@ -235,6 +312,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     if (remoteUserId) {
       socket.emit("call-rejected", { roomId, targetId: remoteUserId });
     }
+    cleanup();
     setCallStatus("idle");
     setRemoteUserId(null);
 
@@ -275,16 +353,214 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
 
   const otherUsers = users.filter((u) => u.id !== currentUserId);
 
+  // Render audio call UI (no video elements)
+  const renderAudioCallUI = (status: "calling" | "incoming" | "connected") => {
+    return (
+      <div className="py-12">
+        <div className="flex justify-center gap-8 mb-8">
+          {/* Local User */}
+          <div className="text-center">
+            <div className="w-24 h-24 mx-auto mb-3 rounded-full bg-gradient-to-br from-violet-600 to-violet-400 flex items-center justify-center">
+              <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+            <p className="text-white text-sm font-medium">You</p>
+          </div>
+
+          {/* Remote User */}
+          <div className="text-center">
+            <div className={`w-24 h-24 mx-auto mb-3 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-400 flex items-center justify-center ${status === "calling" ? "animate-pulse" : status === "incoming" ? "animate-bounce" : ""}`}>
+              <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+            <p className="text-white text-sm font-medium">{remoteUserName}</p>
+            {status === "calling" && <p className="text-gray-400 text-xs mt-1">Calling...</p>}
+            {status === "incoming" && !isStreamReady && <p className="text-yellow-400 text-xs mt-1">⏳ Requesting mic access...</p>}
+            {status === "incoming" && isStreamReady && <p className="text-gray-400 text-xs mt-1">Incoming call...</p>}
+            {status === "connected" && <p className="text-emerald-400 text-xs mt-1">Connected</p>}
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="flex justify-center gap-4">
+          <button
+            onClick={toggleAudio}
+            className={`p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
+          >
+            {isAudioEnabled ? (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+              </svg>
+            )}
+          </button>
+
+          {status === "incoming" ? (
+            <>
+              <button
+                onClick={rejectCall}
+                className="p-4 bg-red-600 hover:bg-red-500 rounded-full transition-all"
+                disabled={isAccepting}
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <button
+                onClick={acceptCall}
+                className={`p-4 rounded-full transition-all ${isAccepting ? "bg-emerald-700 cursor-wait" : "bg-emerald-600 hover:bg-emerald-500"}`}
+                disabled={isAccepting}
+              >
+                {isAccepting ? (
+                  <svg className="w-6 h-6 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            </>
+          ) : (
+            <button onClick={endCall} className="p-4 bg-red-600 hover:bg-red-500 rounded-full">
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Render video call UI
+  const renderVideoCallUI = (status: "calling" | "incoming" | "connected") => {
+    return (
+      <div>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
+            <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">You</span>
+          </div>
+          <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
+            {status === "connected" ? (
+              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className={`w-16 h-16 mx-auto mb-3 rounded-full ${status === "calling" ? "bg-violet-600 animate-pulse" : "bg-emerald-600 animate-bounce"} flex items-center justify-center`}>
+                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                    </svg>
+                  </div>
+                  <p className="text-white text-sm font-medium mb-1">
+                    {status === "calling" ? `Calling ${remoteUserName}...` : `${remoteUserName} is calling...`}
+                  </p>
+                  <p className="text-gray-400 text-xs">Video call</p>
+                  {status === "incoming" && !isStreamReady && (
+                    <p className="text-yellow-400 text-xs mt-2">⏳ Requesting camera access...</p>
+                  )}
+                </div>
+              </div>
+            )}
+            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">{remoteUserName}</span>
+          </div>
+        </div>
+        <div className="flex justify-center gap-4">
+          <button
+            onClick={toggleAudio}
+            className={`p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
+          >
+            {isAudioEnabled ? (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={toggleVideo}
+            className={`p-4 rounded-full transition-colors ${isVideoEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
+          >
+            {isVideoEnabled ? (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+            )}
+          </button>
+
+          {status === "incoming" ? (
+            <>
+              <button
+                onClick={rejectCall}
+                className="p-4 bg-red-600 hover:bg-red-500 rounded-full transition-all"
+                disabled={isAccepting}
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <button
+                onClick={acceptCall}
+                className={`p-4 rounded-full transition-all ${isAccepting ? "bg-emerald-700 cursor-wait" : "bg-emerald-600 hover:bg-emerald-500"}`}
+                disabled={isAccepting}
+              >
+                {isAccepting ? (
+                  <svg className="w-6 h-6 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            </>
+          ) : (
+            <button onClick={endCall} className="p-4 bg-red-600 hover:bg-red-500 rounded-full">
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#12121a] rounded-2xl border border-white/10 w-full max-w-4xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <h3 className="font-semibold text-white flex items-center gap-2">
-            <svg className="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            Video Call
+            {currentCallType === "video" ? (
+              <svg className="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+              </svg>
+            )}
+            {currentCallType === "video" ? "Video Call" : "Audio Call"}
           </h3>
           <button onClick={() => { cleanup(); onClose(); }} className="text-gray-400 hover:text-white">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -314,6 +590,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                         <button
                           onClick={() => callUser(user.id, "audio")}
                           className="p-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors"
+                          title="Audio call"
                         >
                           <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
@@ -322,6 +599,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                         <button
                           onClick={() => callUser(user.id, "video")}
                           className="p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
+                          title="Video call"
                         >
                           <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -336,94 +614,15 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
           )}
 
           {callStatus === "calling" && (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-violet-600 flex items-center justify-center animate-pulse">
-                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
-              </div>
-              <p className="text-white text-lg mb-2">Calling {remoteUserName}...</p>
-              <button onClick={endCall} className="mt-4 px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl">
-                Cancel
-              </button>
-            </div>
+            currentCallType === "audio" ? renderAudioCallUI("calling") : renderVideoCallUI("calling")
           )}
 
           {callStatus === "incoming" && (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-emerald-600 flex items-center justify-center animate-bounce">
-                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
-              </div>
-              <p className="text-white text-lg mb-2">{remoteUserName} is calling...</p>
-              <p className="text-gray-400 mb-4">{incomingCallType === "video" ? "Video" : "Audio"} call</p>
-              <div className="flex justify-center gap-4">
-                <button onClick={rejectCall} className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  Decline
-                </button>
-                <button onClick={acceptCall} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  Accept
-                </button>
-              </div>
-            </div>
+            currentCallType === "audio" ? renderAudioCallUI("incoming") : renderVideoCallUI("incoming")
           )}
 
           {callStatus === "connected" && (
-            <div>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
-                  <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
-                  <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">You</span>
-                </div>
-                <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
-                  <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                  <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">{remoteUserName}</span>
-                </div>
-              </div>
-              <div className="flex justify-center gap-4">
-                <button
-                  onClick={toggleAudio}
-                  className={`p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
-                >
-                  {isAudioEnabled ? (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                    </svg>
-                  )}
-                </button>
-                <button
-                  onClick={toggleVideo}
-                  className={`p-4 rounded-full transition-colors ${isVideoEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
-                >
-                  {isVideoEnabled ? (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                  )}
-                </button>
-                <button onClick={endCall} className="p-4 bg-red-600 hover:bg-red-500 rounded-full">
-                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
-                  </svg>
-                </button>
-              </div>
-            </div>
+            currentCallType === "audio" ? renderAudioCallUI("connected") : renderVideoCallUI("connected")
           )}
         </div>
       </div>
