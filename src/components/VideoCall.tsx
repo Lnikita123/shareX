@@ -23,6 +23,8 @@ const iceServers = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
   ],
 };
 
@@ -38,7 +40,9 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteUserIdRef = useRef<string | null>(null);
 
@@ -46,6 +50,18 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   useEffect(() => {
     remoteUserIdRef.current = remoteUserId;
   }, [remoteUserId]);
+
+  // Apply remote stream when video/audio elements become available
+  useEffect(() => {
+    if (remoteStreamRef.current) {
+      if (remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      }
+      if (remoteAudioRef.current && !remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+      }
+    }
+  }, [callStatus]);
 
   const cleanup = useCallback(() => {
     if (peerConnectionRef.current) {
@@ -56,6 +72,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     }
+    remoteStreamRef.current = null;
     setIsStreamReady(false);
     setIsAccepting(false);
   }, []);
@@ -96,18 +113,38 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     };
 
     pc.ontrack = (event) => {
+      console.log("ontrack received:", event.streams[0]);
+      remoteStreamRef.current = event.streams[0];
+
+      // Set video stream
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = event.streams[0];
       }
+
+      // Set audio stream (for audio-only calls)
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = event.streams[0];
+      }
+
+      // Mark as connected when we receive remote stream
+      setCallStatus("connected");
     };
 
     pc.onconnectionstatechange = () => {
+      console.log("Connection state:", pc.connectionState);
       if (pc.connectionState === "connected") {
         setCallStatus("connected");
       } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
         cleanup();
         setCallStatus("idle");
         setRemoteUserId(null);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE connection state:", pc.iceConnectionState);
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        setCallStatus("connected");
       }
     };
 
@@ -140,23 +177,6 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       initStream();
     }
   }, [initialIncomingCall, startLocalStream]);
-
-  const handleIncomingCall = useCallback((data: { fromId: string; fromName: string; type: "audio" | "video" }) => {
-    setRemoteUserId(data.fromId);
-    setRemoteUserName(data.fromName);
-    setCurrentCallType(data.type);
-    setCallStatus("incoming");
-
-    // Start local stream immediately for incoming call
-    const initStream = async () => {
-      try {
-        await startLocalStream(data.type);
-      } catch (error) {
-        console.error("Failed to start stream:", error);
-      }
-    };
-    initStream();
-  }, [startLocalStream]);
 
   const handleCallAccepted = useCallback(async () => {
     if (!remoteUserIdRef.current) return;
@@ -357,6 +377,9 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   const renderAudioCallUI = (status: "calling" | "incoming" | "connected") => {
     return (
       <div className="py-12">
+        {/* Hidden audio element for remote stream */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
         <div className="flex justify-center gap-8 mb-8">
           {/* Local User */}
           <div className="text-center">
@@ -451,9 +474,14 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
             <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">You</span>
           </div>
           <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
-            {status === "connected" ? (
-              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-            ) : (
+            {/* Always render video element so ontrack can assign stream */}
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className={`w-full h-full object-cover ${status !== "connected" ? "hidden" : ""}`}
+            />
+            {status !== "connected" && (
               <div className="w-full h-full flex items-center justify-center">
                 <div className="text-center">
                   <div className={`w-16 h-16 mx-auto mb-3 rounded-full ${status === "calling" ? "bg-violet-600 animate-pulse" : "bg-emerald-600 animate-bounce"} flex items-center justify-center`}>

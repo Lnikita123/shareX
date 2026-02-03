@@ -1,0 +1,21 @@
+# Render Blueprint - Socket Server Configuration
+# Documentation: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: codeshare-socket
+    runtime: node
+    region: oregon # Change to your preferred region (oregon, ohio, frankfurt, singapore)
+    plan: free # Options: free, starter, standard, pro
+    buildCommand: npm install
+    startCommand: npx tsx socket-server.ts
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: ALLOWED_ORIGINS
+        # Add your Vercel app URL here after deployment
+        # Example: https://your-app.vercel.app,https://your-custom-domain.com
+        sync: false

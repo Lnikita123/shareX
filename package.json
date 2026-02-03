@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "npx tsx server.ts",
     "dev:next": "next dev",
+    "dev:socket": "npx tsx socket-server.ts",
     "build": "next build",
     "start": "NODE_ENV=production npx tsx server.ts",
+    "start:socket": "NODE_ENV=production npx tsx socket-server.ts",
     "lint": "eslint"
   },
   "dependencies": {
