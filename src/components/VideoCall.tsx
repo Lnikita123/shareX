@@ -51,6 +51,13 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     remoteUserIdRef.current = remoteUserId;
   }, [remoteUserId]);
 
+  // Apply local stream when video element becomes available (after callStatus changes from idle)
+  useEffect(() => {
+    if (localStreamRef.current && localVideoRef.current && currentCallType === "video") {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+  }, [callStatus, currentCallType, isStreamReady]);
+
   // Apply remote stream when video/audio elements become available
   useEffect(() => {
     if (remoteStreamRef.current) {
@@ -376,41 +383,41 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   // Render audio call UI (no video elements)
   const renderAudioCallUI = (status: "calling" | "incoming" | "connected") => {
     return (
-      <div className="py-12">
+      <div className="py-6 sm:py-12">
         {/* Hidden audio element for remote stream */}
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-        <div className="flex justify-center gap-8 mb-8">
+        <div className="flex justify-center gap-6 sm:gap-8 mb-6 sm:mb-8">
           {/* Local User */}
           <div className="text-center">
-            <div className="w-24 h-24 mx-auto mb-3 rounded-full bg-gradient-to-br from-violet-600 to-violet-400 flex items-center justify-center">
-              <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-16 h-16 sm:w-24 sm:h-24 mx-auto mb-2 sm:mb-3 rounded-full bg-gradient-to-br from-violet-600 to-violet-400 flex items-center justify-center">
+              <svg className="w-8 h-8 sm:w-12 sm:h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
-            <p className="text-white text-sm font-medium">You</p>
+            <p className="text-white text-xs sm:text-sm font-medium">You</p>
           </div>
 
           {/* Remote User */}
           <div className="text-center">
-            <div className={`w-24 h-24 mx-auto mb-3 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-400 flex items-center justify-center ${status === "calling" ? "animate-pulse" : status === "incoming" ? "animate-bounce" : ""}`}>
-              <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className={`w-16 h-16 sm:w-24 sm:h-24 mx-auto mb-2 sm:mb-3 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-400 flex items-center justify-center ${status === "calling" ? "animate-pulse" : status === "incoming" ? "animate-bounce" : ""}`}>
+              <svg className="w-8 h-8 sm:w-12 sm:h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
-            <p className="text-white text-sm font-medium">{remoteUserName}</p>
+            <p className="text-white text-xs sm:text-sm font-medium">{remoteUserName}</p>
             {status === "calling" && <p className="text-gray-400 text-xs mt-1">Calling...</p>}
-            {status === "incoming" && !isStreamReady && <p className="text-yellow-400 text-xs mt-1">⏳ Requesting mic access...</p>}
+            {status === "incoming" && !isStreamReady && <p className="text-yellow-400 text-xs mt-1">Requesting mic...</p>}
             {status === "incoming" && isStreamReady && <p className="text-gray-400 text-xs mt-1">Incoming call...</p>}
             {status === "connected" && <p className="text-emerald-400 text-xs mt-1">Connected</p>}
           </div>
         </div>
 
         {/* Controls */}
-        <div className="flex justify-center gap-4">
+        <div className="flex justify-center gap-3 sm:gap-4">
           <button
             onClick={toggleAudio}
-            className={`p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
+            className={`p-3 sm:p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
           >
             {isAudioEnabled ? (
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -468,10 +475,10 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   const renderVideoCallUI = (status: "calling" | "incoming" | "connected") => {
     return (
       <div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
           <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
             <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
-            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">You</span>
+            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-xs sm:text-sm">You</span>
           </div>
           <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
             {/* Always render video element so ontrack can assign stream */}
@@ -499,10 +506,10 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                 </div>
               </div>
             )}
-            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-sm">{remoteUserName}</span>
+            <span className="absolute bottom-2 left-2 px-2 py-1 bg-black/50 rounded text-white text-xs sm:text-sm">{remoteUserName}</span>
           </div>
         </div>
-        <div className="flex justify-center gap-4">
+        <div className="flex justify-center gap-3 sm:gap-4">
           <button
             onClick={toggleAudio}
             className={`p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
@@ -574,11 +581,11 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[#12121a] rounded-2xl border border-white/10 w-full max-w-4xl overflow-hidden">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-[#12121a] rounded-2xl border border-white/10 w-full h-full sm:h-auto max-w-4xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
-          <h3 className="font-semibold text-white flex items-center gap-2">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-white/5">
+          <h3 className="font-semibold text-white flex items-center gap-2 text-sm sm:text-base">
             {currentCallType === "video" ? (
               <svg className="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -590,29 +597,29 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
             )}
             {currentCallType === "video" ? "Video Call" : "Audio Call"}
           </h3>
-          <button onClick={() => { cleanup(); onClose(); }} className="text-gray-400 hover:text-white">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <button onClick={() => { cleanup(); onClose(); }} className="text-gray-400 hover:text-white p-1">
+            <svg className="w-6 h-6 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6 flex-1 overflow-y-auto">
           {callStatus === "idle" && (
             <div>
-              <p className="text-gray-400 mb-4">Select a user to call:</p>
-              <div className="grid grid-cols-2 gap-3">
+              <p className="text-gray-400 mb-4 text-sm sm:text-base">Select a user to call:</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {otherUsers.length === 0 ? (
-                  <p className="text-gray-500 col-span-2 text-center py-8">No other users in the room</p>
+                  <p className="text-gray-500 col-span-full text-center py-8">No other users in the room</p>
                 ) : (
                   otherUsers.map((user) => (
-                    <div key={user.id} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ backgroundColor: user.color }}>
+                    <div key={user.id} className="flex items-center justify-between p-3 sm:p-4 bg-white/5 rounded-xl border border-white/10">
+                      <div className="flex items-center gap-2 sm:gap-3">
+                        <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm sm:text-base" style={{ backgroundColor: user.color }}>
                           {user.name[0]}
                         </div>
-                        <span className="text-white">{user.name}</span>
+                        <span className="text-white text-sm sm:text-base">{user.name}</span>
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -620,7 +627,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                           className="p-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors"
                           title="Audio call"
                         >
-                          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                           </svg>
                         </button>
@@ -629,7 +636,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                           className="p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
                           title="Video call"
                         >
-                          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                           </svg>
                         </button>

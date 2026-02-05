@@ -311,35 +311,35 @@ export default function FileShare({ roomId }: FileShareProps) {
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0f]">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 bg-[#12121a] border-b border-white/5">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold">
+      <header className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5">
+        <div className="flex items-center gap-2 sm:gap-4">
+          <h1 className="text-lg sm:text-xl font-bold">
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
               Sharex
             </span>
           </h1>
-          <div className="flex items-center gap-2 text-sm text-gray-400">
+          <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
             <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
-            {isConnected ? "Connected" : "Disconnected"}
+            <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Users */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-lg border border-white/10">
+          <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 rounded-lg border border-white/10">
             <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
             </svg>
-            <span className="text-sm text-gray-300">{userCount}</span>
+            <span className="text-xs sm:text-sm text-gray-300">{userCount}</span>
           </div>
 
           {/* Video Call */}
           <button
             onClick={() => setShowVideoCall(true)}
-            className="p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
+            className="p-1.5 sm:p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
             title="Video Call"
           >
-            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
@@ -347,18 +347,18 @@ export default function FileShare({ roomId }: FileShareProps) {
           {/* Share */}
           <button
             onClick={copyShareLink}
-            className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-cyan-500/25"
+            className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white text-xs sm:text-sm font-medium rounded-lg transition-all shadow-lg shadow-cyan-500/25"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
             </svg>
-            {copied ? "Copied!" : "Share"}
+            <span className="hidden xs:inline">{copied ? "Copied!" : "Share"}</span>
           </button>
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
         <div className="w-full max-w-2xl">
           {!file ? (
             /* Upload Area */
@@ -367,7 +367,7 @@ export default function FileShare({ roomId }: FileShareProps) {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onClick={() => fileInputRef.current?.click()}
-              className={`relative border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all duration-300 ${
+              className={`relative border-2 border-dashed rounded-2xl sm:rounded-3xl p-6 sm:p-12 text-center cursor-pointer transition-all duration-300 ${
                 isDragging
                   ? "border-cyan-500 bg-cyan-500/10"
                   : "border-white/10 hover:border-cyan-500/50 hover:bg-white/[0.02]"

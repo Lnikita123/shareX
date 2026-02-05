@@ -39,6 +39,11 @@ export default function RoomPage({ params }: PageProps) {
     return type === "code" || type === "file" ? type : null;
   }, [searchParams]);
 
+  const initialCallType = useMemo(() => {
+    const call = searchParams.get("call");
+    return call === "audio" || call === "video" ? call : null;
+  }, [searchParams]);
+
   const [roomType, setRoomType] = useState<"code" | "file" | null>(initialType);
   const [isSelecting, setIsSelecting] = useState(initialType === null);
 
@@ -110,7 +115,7 @@ export default function RoomPage({ params }: PageProps) {
   }
 
   return roomType === "code" ? (
-    <CodeEditor roomId={resolvedParams.roomId} />
+    <CodeEditor roomId={resolvedParams.roomId} autoCall={initialCallType} />
   ) : (
     <FileShare roomId={resolvedParams.roomId} />
   );

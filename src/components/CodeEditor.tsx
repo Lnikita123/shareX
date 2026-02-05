@@ -12,6 +12,7 @@ const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
 
 interface CodeEditorProps {
   roomId: string;
+  autoCall?: "audio" | "video" | null;
 }
 
 interface UserInfo {
@@ -127,7 +128,7 @@ const defineThemes = (monaco: typeof Monaco) => {
   });
 };
 
-export default function CodeEditor({ roomId }: CodeEditorProps) {
+export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
   const [code, setCode] = useState<string>("// Start coding here...\n");
   const [language, setLanguage] = useState<string>("javascript");
   const [theme, setTheme] = useState<string>("vs-dark");
@@ -137,7 +138,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [showChat, setShowChat] = useState<boolean>(false);
-  const [showVideoCall, setShowVideoCall] = useState<boolean>(false);
+  const [showVideoCall, setShowVideoCall] = useState<boolean>(!!autoCall);
   const [incomingCall, setIncomingCall] = useState<{ fromId: string; fromName: string; type: "audio" | "video" } | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
@@ -147,6 +148,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
   const [gistUrl, setGistUrl] = useState<string>("");
   const [gistLoading, setGistLoading] = useState<boolean>(false);
   const [unreadMessages, setUnreadMessages] = useState<number>(0);
+  const [isMobile, setIsMobile] = useState<boolean>(false);
 
   const socketRef = useRef<Socket | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -178,7 +180,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       isRemoteUpdate.current = true;
       setCode(data.code);
       setLanguage(data.language);
-      setTheme(data.theme || "vs-dark");
+      // Theme is local-only - don't sync from server
       setUsers(data.users);
       setMessages(data.messages);
       setUserInfo(data.userInfo);
@@ -199,9 +201,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       setLanguage(data.language);
     });
 
-    socket.on("theme-update", (data: { theme: string }) => {
-      setTheme(data.theme);
-    });
+    // Theme is local-only - removed theme-update listener
 
     socket.on("user-joined", (data: { user: UserInfo; users: UserInfo[] }) => {
       setUsers(data.users);
@@ -272,7 +272,6 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       socket.off("room-data");
       socket.off("code-update");
       socket.off("language-update");
-      socket.off("theme-update");
       socket.off("user-joined");
       socket.off("user-left");
       socket.off("users-update");
@@ -330,6 +329,16 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
       ringtoneRef.current.currentTime = 0;
     }
   }, [showVideoCall]);
+
+  // Detect mobile devices for responsive editor settings
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
 
   const updateRemoteCursor = (userId: string, cursor: { lineNumber: number; column: number }, userName: string, userColor: string) => {
     if (!editorRef.current || !monacoRef.current) return;
@@ -458,10 +467,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
   const handleThemeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newTheme = e.target.value;
     setTheme(newTheme);
-
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit("theme-change", { roomId, theme: newTheme });
-    }
+    // Theme is local-only - not synced to other users
   };
 
   const handleEditorMount: OnMount = (editor, monaco) => {
@@ -507,27 +513,44 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
   const copyShareLink = async () => {
     const url = window.location.href;
     try {
-      // Try using clipboard API first
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+      // Try using clipboard API first (works in secure contexts)
+      if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
       } else {
         // Fallback: Create a temporary textarea
         const textArea = document.createElement("textarea");
         textArea.value = url;
         textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        textArea.style.top = "-999999px";
+        textArea.style.left = "0";
+        textArea.style.top = "0";
+        textArea.style.width = "2em";
+        textArea.style.height = "2em";
+        textArea.style.padding = "0";
+        textArea.style.border = "none";
+        textArea.style.outline = "none";
+        textArea.style.boxShadow = "none";
+        textArea.style.background = "transparent";
+        textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        document.execCommand("copy");
+
+        const successful = document.execCommand("copy");
         document.body.removeChild(textArea);
+
+        if (successful) {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } else {
+          // Show prompt with URL if copy fails
+          window.prompt("Copy this link:", url);
+        }
       }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // If copy fails, show the URL in an alert
-      alert(`Copy this link: ${url}`);
+      // If copy fails, show prompt with URL
+      window.prompt("Copy this link:", url);
     }
   };
 
@@ -661,43 +684,45 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
     <div className="flex h-screen bg-[#0a0a0f]">
       <div className="flex flex-col flex-1">
         {/* Header */}
-        <header className="flex items-center justify-between px-4 py-3 bg-[#12121a] border-b border-white/5">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold">
-              <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
-                Sharex
-              </span>
-            </h1>
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
-              {isConnected ? "Connected" : "Disconnected"}
+        <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5 gap-2 sm:gap-0">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
+            <div className="flex items-center gap-2 sm:gap-4">
+              <h1 className="text-lg sm:text-xl font-bold">
+                <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
+                  Sharex
+                </span>
+              </h1>
+              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
+                <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
+                <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
+              </div>
             </div>
             {/* User avatars */}
             <div className="flex -space-x-2">
-              {users.slice(0, 5).map((user) => (
+              {users.slice(0, 3).map((user) => (
                 <div
                   key={user.id}
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white border-2 border-[#12121a]"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-xs font-bold text-white border-2 border-[#12121a]"
                   style={{ backgroundColor: user.color }}
                   title={user.name}
                 >
                   {user.name[0]}
                 </div>
               ))}
-              {users.length > 5 && (
-                <div className="w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center text-xs text-white border-2 border-[#12121a]">
-                  +{users.length - 5}
+              {users.length > 3 && (
+                <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-gray-600 flex items-center justify-center text-xs text-white border-2 border-[#12121a]">
+                  +{users.length - 3}
                 </div>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
             {/* Language */}
             <select
               value={language}
               onChange={handleLanguageChange}
-              className="px-3 py-1.5 bg-white/5 text-gray-300 text-sm rounded-lg border border-white/10 focus:outline-none focus:border-violet-500/50 cursor-pointer"
+              className="px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 text-gray-300 text-xs sm:text-sm rounded-lg border border-white/10 focus:outline-none focus:border-violet-500/50 cursor-pointer min-w-0"
             >
               {LANGUAGES.map((lang) => (
                 <option key={lang.value} value={lang.value} className="bg-[#1a1a24]">
@@ -710,7 +735,7 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
             <select
               value={theme}
               onChange={handleThemeChange}
-              className="px-3 py-1.5 bg-white/5 text-gray-300 text-sm rounded-lg border border-white/10 focus:outline-none focus:border-violet-500/50 cursor-pointer"
+              className="px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 text-gray-300 text-xs sm:text-sm rounded-lg border border-white/10 focus:outline-none focus:border-violet-500/50 cursor-pointer min-w-0"
             >
               {THEMES.map((t) => (
                 <option key={t.value} value={t.value} className="bg-[#1a1a24]">
@@ -722,20 +747,20 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
             {/* Import Gist */}
             <button
               onClick={() => setShowGistModal(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-sm rounded-lg border border-white/10 transition-colors"
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-xs sm:text-sm rounded-lg border border-white/10 transition-colors flex-shrink-0"
               title="Import from GitHub Gist"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
               </svg>
-              Gist
+              <span className="hidden sm:inline">Gist</span>
             </button>
 
             {/* Run Code */}
             <button
               onClick={runCode}
               disabled={isRunning}
-              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 text-white text-sm rounded-lg transition-colors"
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 text-white text-xs sm:text-sm rounded-lg transition-colors flex-shrink-0"
             >
               {isRunning ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -745,55 +770,32 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               )}
-              Run
+              <span className="hidden sm:inline">Run</span>
             </button>
 
             {/* Export */}
             <button
               onClick={exportCode}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-sm rounded-lg border border-white/10 transition-colors"
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-xs sm:text-sm rounded-lg border border-white/10 transition-colors flex-shrink-0"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              Export
-            </button>
-
-            {/* Video Call */}
-            <button
-              onClick={() => setShowVideoCall(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-sm rounded-lg transition-colors"
-              title="Start Video Call"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              Video
-            </button>
-
-            {/* Audio Call */}
-            <button
-              onClick={() => setShowVideoCall(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition-colors"
-              title="Start Audio Call"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-              </svg>
-              Call
+              <span className="hidden sm:inline">Export</span>
             </button>
 
             {/* Chat Toggle */}
             <button
               onClick={toggleChat}
-              className="relative flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-sm rounded-lg border border-white/10 transition-colors"
+              className="relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-xs sm:text-sm rounded-lg border border-white/10 transition-colors flex-shrink-0"
               title="Open Chat"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
+              <span className="hidden sm:inline">Chat</span>
               {unreadMessages > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
+                <span className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
                   {unreadMessages}
                 </span>
               )}
@@ -802,11 +804,21 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
             {/* Share */}
             <button
               onClick={copyShareLink}
-              className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-violet-500/25"
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 text-white text-xs sm:text-sm font-medium rounded-lg transition-all shadow-lg flex-shrink-0 ${
+                copied
+                  ? "bg-emerald-600 shadow-emerald-500/25"
+                  : "bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 shadow-violet-500/25"
+              }`}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
+              {copied ? (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+              )}
               {copied ? "Copied!" : "Share"}
             </button>
           </div>
@@ -822,22 +834,24 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
             onChange={handleEditorChange}
             onMount={handleEditorMount}
             options={{
-              fontSize: 14,
+              fontSize: isMobile ? 12 : 14,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
               fontLigatures: true,
-              minimap: { enabled: true },
-              lineNumbers: "on",
+              minimap: { enabled: !isMobile },
+              lineNumbers: isMobile ? "off" : "on",
               roundedSelection: true,
               scrollBeyondLastLine: false,
               automaticLayout: true,
               tabSize: 2,
               wordWrap: "on",
-              padding: { top: 16 },
+              padding: { top: isMobile ? 8 : 16 },
               cursorBlinking: "smooth",
               cursorSmoothCaretAnimation: "on",
               smoothScrolling: true,
               renderLineHighlight: "all",
               bracketPairColorization: { enabled: true },
+              folding: !isMobile,
+              glyphMargin: !isMobile,
             }}
           />
 
@@ -857,19 +871,20 @@ export default function CodeEditor({ roomId }: CodeEditorProps) {
               </pre>
             </div>
           )}
+
         </div>
 
         {/* Footer */}
-        <footer className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-violet-600/90 to-cyan-600/90 text-white text-sm">
-          <div className="flex items-center gap-4">
-            <span className="opacity-80">Room: {roomId}</span>
-            <span className="opacity-80">Lines: {lineCount}</span>
+        <footer className="flex items-center justify-between px-2 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-violet-600/90 to-cyan-600/90 text-white text-xs sm:text-sm">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <span className="opacity-80 truncate max-w-[80px] sm:max-w-none">Room: {roomId}</span>
+            <span className="opacity-80 hidden sm:inline">Lines: {lineCount}</span>
             <span className="opacity-80">Users: {users.length}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <span className="opacity-80">{LANGUAGES.find((l) => l.value === language)?.label}</span>
-            <span className="opacity-60">•</span>
-            <span className="opacity-80">{currentTheme?.label}</span>
+            <span className="opacity-60 hidden sm:inline">•</span>
+            <span className="opacity-80 hidden sm:inline">{currentTheme?.label}</span>
           </div>
         </footer>
       </div>
