@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Editor, { OnMount, OnChange } from "@monaco-editor/react";
 import { getSocket } from "@/lib/socket";
 import type { Socket } from "socket.io-client";
@@ -129,6 +130,7 @@ const defineThemes = (monaco: typeof Monaco) => {
 };
 
 export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
+  const router = useRouter();
   const [code, setCode] = useState<string>("// Start coding here...\n");
   const [language, setLanguage] = useState<string>("javascript");
   const [theme, setTheme] = useState<string>("vs-dark");
@@ -687,11 +689,16 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
         <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5 gap-2 sm:gap-0">
           <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
             <div className="flex items-center gap-2 sm:gap-4">
-              <h1 className="text-lg sm:text-xl font-bold">
+              {/* Clickable Sharex Logo */}
+              <button
+                onClick={() => router.push("/")}
+                className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
+                title="Go to Home"
+              >
                 <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
                   Sharex
                 </span>
-              </h1>
+              </button>
               <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
                 <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
                 <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
@@ -820,6 +827,18 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
                 </svg>
               )}
               {copied ? "Copied!" : "Share"}
+            </button>
+
+            {/* Exit */}
+            <button
+              onClick={() => router.push("/")}
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs sm:text-sm rounded-lg transition-colors flex-shrink-0"
+              title="Exit to Home"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span className="hidden sm:inline">Exit</span>
             </button>
           </div>
         </header>

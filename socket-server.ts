@@ -64,7 +64,15 @@ interface FileRoomData {
   createdAt: number;
 }
 
-type RoomData = CodeRoomData | FileRoomData;
+interface CallRoomData {
+  type: "call";
+  callType: "audio" | "video";
+  users: Map<string, UserInfo>;
+  messages: ChatMessage[];
+  createdAt: number;
+}
+
+type RoomData = CodeRoomData | FileRoomData | CallRoomData;
 
 const rooms: Map<string, RoomData> = new Map();
 
@@ -362,17 +370,90 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Call room handlers
+  socket.on("join-call-room", (data: { roomId: string; callType: "audio" | "video" }) => {
+    const { roomId, callType } = data;
+    currentRoom = roomId;
+    socket.join(roomId);
+
+    const now = Date.now();
+    if (!rooms.has(roomId)) {
+      rooms.set(roomId, {
+        type: "call",
+        callType,
+        users: new Map([[socket.id, userInfo]]),
+        messages: [],
+        createdAt: now,
+      });
+    } else {
+      const room = rooms.get(roomId)!;
+      room.users.set(socket.id, userInfo);
+    }
+
+    const roomData = rooms.get(roomId)! as CallRoomData;
+    socket.emit("call-room-data", {
+      users: Array.from(roomData.users.values()),
+      messages: roomData.messages.slice(-50),
+      userInfo,
+    });
+
+    socket.to(roomId).emit("user-joined-call", {
+      user: userInfo,
+      users: Array.from(roomData.users.values()),
+    });
+
+    console.log(`User ${userInfo.name} joined call room ${roomId}. Users: ${roomData.users.size}`);
+  });
+
+  socket.on("leave-call-room", (roomId: string) => {
+    const room = rooms.get(roomId);
+    if (room && room.type === "call") {
+      room.users.delete(socket.id);
+      socket.to(roomId).emit("user-left-call", {
+        userId: socket.id,
+        users: Array.from(room.users.values()),
+      });
+      socket.leave(roomId);
+      console.log(`User ${userInfo.name} left call room ${roomId}. Users: ${room.users.size}`);
+    }
+  });
+
+  // Emoji reactions
+  socket.on("emoji-reaction", (data: { roomId: string; emoji: string }) => {
+    const { roomId, emoji } = data;
+    const room = rooms.get(roomId);
+    if (room) {
+      io.to(roomId).emit("emoji-reaction", {
+        emoji,
+        userName: userInfo.name,
+        userColor: userInfo.color,
+      });
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
     if (currentRoom && rooms.has(currentRoom)) {
       const roomData = rooms.get(currentRoom)!;
       roomData.users.delete(socket.id);
 
-      const userData = roomData.type === "code"
-        ? { oderId: socket.id, users: Array.from(roomData.users.values()) }
-        : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
-
-      socket.to(currentRoom).emit("user-left", userData);
+      if (roomData.type === "code") {
+        socket.to(currentRoom).emit("user-left", {
+          oderId: socket.id,
+          users: Array.from(roomData.users.values()),
+        });
+      } else if (roomData.type === "file") {
+        socket.to(currentRoom).emit("user-left", {
+          userId: socket.id,
+          users: Array.from(roomData.users.values()),
+          userCount: roomData.users.size,
+        });
+      } else if (roomData.type === "call") {
+        socket.to(currentRoom).emit("user-left-call", {
+          userId: socket.id,
+          users: Array.from(roomData.users.values()),
+        });
+      }
 
       // Delete empty rooms after 5 minutes
       if (roomData.users.size === 0) {

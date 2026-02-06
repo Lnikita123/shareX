@@ -14,6 +14,11 @@ const FileShare = dynamic(() => import("@/components/FileShare"), {
   loading: () => <LoadingScreen />,
 });
 
+const CallRoom = dynamic(() => import("@/components/CallRoom"), {
+  ssr: false,
+  loading: () => <LoadingScreen />,
+});
+
 function LoadingScreen() {
   return (
     <div className="flex items-center justify-center h-screen bg-[#0a0a0f]">
@@ -36,7 +41,7 @@ export default function RoomPage({ params }: PageProps) {
   // Compute initial values from URL params
   const initialType = useMemo(() => {
     const type = searchParams.get("type");
-    return type === "code" || type === "file" ? type : null;
+    return type === "code" || type === "file" || type === "call" ? type : null;
   }, [searchParams]);
 
   const initialCallType = useMemo(() => {
@@ -44,14 +49,18 @@ export default function RoomPage({ params }: PageProps) {
     return call === "audio" || call === "video" ? call : null;
   }, [searchParams]);
 
-  const [roomType, setRoomType] = useState<"code" | "file" | null>(initialType);
+  const [roomType, setRoomType] = useState<"code" | "file" | "call" | null>(initialType);
   const [isSelecting, setIsSelecting] = useState(initialType === null);
 
-  const selectType = (type: "code" | "file") => {
+  const selectType = (type: "code" | "file" | "call", callType?: "audio" | "video") => {
     setRoomType(type);
     setIsSelecting(false);
     // Update URL without reload
-    window.history.replaceState({}, "", `/${resolvedParams.roomId}?type=${type}`);
+    if (type === "call" && callType) {
+      window.history.replaceState({}, "", `/${resolvedParams.roomId}?type=call&call=${callType}`);
+    } else {
+      window.history.replaceState({}, "", `/${resolvedParams.roomId}?type=${type}`);
+    }
   };
 
   if (isSelecting) {
@@ -112,6 +121,10 @@ export default function RoomPage({ params }: PageProps) {
 
   if (!roomType) {
     return <LoadingScreen />;
+  }
+
+  if (roomType === "call") {
+    return <CallRoom roomId={resolvedParams.roomId} callType={initialCallType || "video"} />;
   }
 
   return roomType === "code" ? (

@@ -10,11 +10,11 @@ export default function Home() {
   const [isCreating, setIsCreating] = useState(false);
   const [shareType, setShareType] = useState<"code" | "file" | "call" | null>(null);
 
-  const createNewRoom = (type: "code" | "file", callType?: "audio" | "video") => {
+  const createNewRoom = (type: "code" | "file" | "call", callType?: "audio" | "video") => {
     setIsCreating(true);
     const newRoomId = nanoid(10);
-    if (callType) {
-      router.push(`/${newRoomId}?type=${type}&call=${callType}`);
+    if (type === "call" && callType) {
+      router.push(`/${newRoomId}?type=call&call=${callType}`);
     } else {
       router.push(`/${newRoomId}?type=${type}`);
     }
@@ -157,7 +157,7 @@ export default function Home() {
               {/* Call Type Buttons */}
               <div className="grid grid-cols-2 gap-3 sm:gap-4">
                 <button
-                  onClick={() => createNewRoom("code", "video")}
+                  onClick={() => createNewRoom("call", "video")}
                   disabled={isCreating}
                   className="group p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-gradient-to-br from-violet-500/10 to-violet-600/5 border border-violet-500/20 hover:border-violet-500/40 transition-all duration-300 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -171,7 +171,7 @@ export default function Home() {
                 </button>
 
                 <button
-                  onClick={() => createNewRoom("code", "audio")}
+                  onClick={() => createNewRoom("call", "audio")}
                   disabled={isCreating}
                   className="group p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border border-emerald-500/20 hover:border-emerald-500/40 transition-all duration-300 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
                 >

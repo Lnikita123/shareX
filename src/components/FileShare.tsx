@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { getSocket } from "@/lib/socket";
 import type { Socket } from "socket.io-client";
 import dynamic from "next/dynamic";
@@ -34,6 +35,7 @@ const formatSize = (bytes: number) => {
 };
 
 export default function FileShare({ roomId }: FileShareProps) {
+  const router = useRouter();
   const [file, setFile] = useState<FileData | null>(null);
   const [userCount, setUserCount] = useState<number>(1);
   const [isConnected, setIsConnected] = useState<boolean>(false);
@@ -313,11 +315,16 @@ export default function FileShare({ roomId }: FileShareProps) {
       {/* Header */}
       <header className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5">
         <div className="flex items-center gap-2 sm:gap-4">
-          <h1 className="text-lg sm:text-xl font-bold">
+          {/* Clickable Sharex Logo */}
+          <button
+            onClick={() => router.push("/")}
+            className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
+            title="Go to Home"
+          >
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
               Sharex
             </span>
-          </h1>
+          </button>
           <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
             <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
             <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
@@ -333,26 +340,37 @@ export default function FileShare({ roomId }: FileShareProps) {
             <span className="text-xs sm:text-sm text-gray-300">{userCount}</span>
           </div>
 
-          {/* Video Call */}
-          <button
-            onClick={() => setShowVideoCall(true)}
-            className="p-1.5 sm:p-2 bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors"
-            title="Video Call"
-          >
-            <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-
           {/* Share */}
           <button
             onClick={copyShareLink}
-            className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white text-xs sm:text-sm font-medium rounded-lg transition-all shadow-lg shadow-cyan-500/25"
+            className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 text-white text-xs sm:text-sm font-medium rounded-lg transition-all shadow-lg ${
+              copied
+                ? "bg-emerald-600 shadow-emerald-500/25"
+                : "bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 shadow-cyan-500/25"
+            }`}
+          >
+            {copied ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            )}
+            {copied ? "Copied!" : "Share"}
+          </button>
+
+          {/* Exit */}
+          <button
+            onClick={() => router.push("/")}
+            className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs sm:text-sm rounded-lg transition-colors"
+            title="Exit to Home"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
-            <span className="hidden xs:inline">{copied ? "Copied!" : "Share"}</span>
+            <span className="hidden sm:inline">Exit</span>
           </button>
         </div>
       </header>
