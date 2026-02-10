@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Socket } from "socket.io-client";
+import { getIceServers } from "@/lib/webrtc-config";
 
 interface UserInfo {
   id: string;
@@ -19,24 +20,16 @@ interface VideoCallProps {
   onCallHandled?: () => void;
 }
 
-const iceServers = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-  ],
-};
-
 export default function VideoCall({ socket, roomId, currentUserId, users, onClose, initialIncomingCall, onCallHandled }: VideoCallProps) {
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
-  const [callStatus, setCallStatus] = useState<"idle" | "calling" | "incoming" | "connected">("idle");
+  const [callStatus, setCallStatus] = useState<"idle" | "calling" | "incoming" | "connected" | "error">("idle");
   const [remoteUserId, setRemoteUserId] = useState<string | null>(null);
   const [remoteUserName, setRemoteUserName] = useState<string>("");
   const [currentCallType, setCurrentCallType] = useState<"audio" | "video">("video");
   const [isStreamReady, setIsStreamReady] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -45,6 +38,8 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteUserIdRef = useRef<string | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep remoteUserId ref in sync
   useEffect(() => {
@@ -70,7 +65,27 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     }
   }, [callStatus]);
 
+  const clearConnectionTimeout = useCallback(() => {
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startConnectionTimeout = useCallback(() => {
+    clearConnectionTimeout();
+    connectionTimeoutRef.current = setTimeout(() => {
+      const pc = peerConnectionRef.current;
+      if (pc && pc.connectionState !== "connected") {
+        console.error("Connection timeout: WebRTC connection failed after 30s");
+        setConnectionError("Connection timed out. The remote peer may be unreachable.");
+        setCallStatus("error");
+      }
+    }, 30000);
+  }, [clearConnectionTimeout]);
+
   const cleanup = useCallback(() => {
+    clearConnectionTimeout();
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
@@ -80,9 +95,11 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       localStreamRef.current = null;
     }
     remoteStreamRef.current = null;
+    pendingCandidatesRef.current = [];
     setIsStreamReady(false);
     setIsAccepting(false);
-  }, []);
+    setConnectionError(null);
+  }, [clearConnectionTimeout]);
 
   const startLocalStream = useCallback(async (callType: "audio" | "video") => {
     try {
@@ -106,8 +123,20 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     }
   }, []);
 
+  const flushPendingCandidates = useCallback(async (pc: RTCPeerConnection) => {
+    const candidates = pendingCandidatesRef.current;
+    pendingCandidatesRef.current = [];
+    for (const candidate of candidates) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error("Error adding buffered ICE candidate:", error);
+      }
+    }
+  }, []);
+
   const createPeerConnection = useCallback(() => {
-    const pc = new RTCPeerConnection(iceServers);
+    const pc = new RTCPeerConnection(getIceServers());
 
     pc.onicecandidate = (event) => {
       if (event.candidate && remoteUserIdRef.current) {
@@ -134,14 +163,22 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       }
 
       // Mark as connected when we receive remote stream
+      clearConnectionTimeout();
       setCallStatus("connected");
+      setConnectionError(null);
     };
 
     pc.onconnectionstatechange = () => {
       console.log("Connection state:", pc.connectionState);
       if (pc.connectionState === "connected") {
+        clearConnectionTimeout();
         setCallStatus("connected");
-      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        setConnectionError(null);
+      } else if (pc.connectionState === "failed") {
+        clearConnectionTimeout();
+        setConnectionError("Peer connection failed. The connection could not be established.");
+        setCallStatus("error");
+      } else if (pc.connectionState === "disconnected") {
         cleanup();
         setCallStatus("idle");
         setRemoteUserId(null);
@@ -151,7 +188,13 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     pc.oniceconnectionstatechange = () => {
       console.log("ICE connection state:", pc.iceConnectionState);
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        clearConnectionTimeout();
         setCallStatus("connected");
+        setConnectionError(null);
+      } else if (pc.iceConnectionState === "failed") {
+        clearConnectionTimeout();
+        setConnectionError("ICE connection failed. This may be a network or firewall issue.");
+        setCallStatus("error");
       }
     };
 
@@ -163,7 +206,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
 
     peerConnectionRef.current = pc;
     return pc;
-  }, [socket, roomId, cleanup]);
+  }, [socket, roomId, cleanup, clearConnectionTimeout]);
 
   // Handle initial incoming call from parent (when modal opens with a call)
   useEffect(() => {
@@ -199,6 +242,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     }
 
     const pc = createPeerConnection();
+    startConnectionTimeout();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -207,7 +251,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       targetId: remoteUserIdRef.current,
       offer,
     });
-  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType]);
+  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType, startConnectionTimeout]);
 
   const handleCallRejected = useCallback(() => {
     cleanup();
@@ -237,7 +281,12 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     }
 
     const pc = peerConnectionRef.current!;
+    startConnectionTimeout();
     await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+    // Flush any ICE candidates that arrived before the remote description was set
+    await flushPendingCandidates(pc);
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
@@ -246,19 +295,35 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
       targetId: data.fromId,
       answer,
     });
-  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType]);
+  }, [createPeerConnection, socket, roomId, startLocalStream, currentCallType, flushPendingCandidates, startConnectionTimeout]);
 
   const handleAnswer = useCallback(async (data: { fromId: string; answer: RTCSessionDescriptionInit }) => {
     const pc = peerConnectionRef.current;
     if (pc) {
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+
+      // Flush any ICE candidates that arrived before the remote description was set
+      await flushPendingCandidates(pc);
     }
-  }, []);
+  }, [flushPendingCandidates]);
 
   const handleIceCandidate = useCallback(async (data: { fromId: string; candidate: RTCIceCandidateInit }) => {
     const pc = peerConnectionRef.current;
-    if (pc) {
-      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    if (!pc) {
+      // No peer connection yet, buffer the candidate
+      pendingCandidatesRef.current.push(data.candidate);
+      return;
+    }
+
+    if (pc.remoteDescription) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (error) {
+        console.error("Error adding ICE candidate:", error);
+      }
+    } else {
+      // Remote description not set yet, buffer the candidate
+      pendingCandidatesRef.current.push(data.candidate);
     }
   }, []);
 
@@ -287,6 +352,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     if (!user) return;
 
     setCurrentCallType(type);
+    setConnectionError(null);
 
     // Start local stream before calling
     try {
@@ -301,6 +367,13 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
     setCallStatus("calling");
 
     socket.emit("call-user", { roomId, targetId, type });
+  };
+
+  const retryCall = () => {
+    cleanup();
+    setCallStatus("idle");
+    setRemoteUserId(null);
+    setConnectionError(null);
   };
 
   const acceptCall = async () => {
@@ -501,7 +574,7 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
                   </p>
                   <p className="text-gray-400 text-xs">Video call</p>
                   {status === "incoming" && !isStreamReady && (
-                    <p className="text-yellow-400 text-xs mt-2">⏳ Requesting camera access...</p>
+                    <p className="text-yellow-400 text-xs mt-2">Requesting camera access...</p>
                   )}
                 </div>
               </div>
@@ -575,6 +648,42 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
               </svg>
             </button>
           )}
+        </div>
+      </div>
+    );
+  };
+
+  // Render error UI
+  const renderErrorUI = () => {
+    return (
+      <div className="py-6 sm:py-12">
+        <div className="flex flex-col items-center text-center">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 rounded-full bg-red-600/20 flex items-center justify-center">
+            <svg className="w-8 h-8 sm:w-10 sm:h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          </div>
+          <h4 className="text-white text-lg font-semibold mb-2">Connection Failed</h4>
+          <p className="text-gray-400 text-sm mb-1">
+            {connectionError || "Unable to establish a connection with the remote peer."}
+          </p>
+          <p className="text-gray-500 text-xs mb-6">
+            This could be caused by network issues, firewall restrictions, or the remote user disconnecting.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={retryCall}
+              className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors text-sm font-medium"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => { cleanup(); onClose(); }}
+              className="px-6 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors text-sm font-medium"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -659,6 +768,8 @@ export default function VideoCall({ socket, roomId, currentUserId, users, onClos
           {callStatus === "connected" && (
             currentCallType === "audio" ? renderAudioCallUI("connected") : renderVideoCallUI("connected")
           )}
+
+          {callStatus === "error" && renderErrorUI()}
         </div>
       </div>
     </div>

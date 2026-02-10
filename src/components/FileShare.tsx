@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getSocket } from "@/lib/socket";
+import { getSocket, waitForConnection } from "@/lib/socket";
 import type { Socket } from "socket.io-client";
+import ConnectionStatus from "./ConnectionStatus";
 import dynamic from "next/dynamic";
 
 const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
@@ -315,20 +316,16 @@ export default function FileShare({ roomId }: FileShareProps) {
       {/* Header */}
       <header className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5">
         <div className="flex items-center gap-2 sm:gap-4">
-          {/* Clickable Sharex Logo */}
           <button
             onClick={() => router.push("/")}
             className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
             title="Go to Home"
           >
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
-              Sharex
+              CodeNest
             </span>
           </button>
-          <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
-            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
-            <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
-          </div>
+          <ConnectionStatus />
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">

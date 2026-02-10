@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Editor, { OnMount, OnChange } from "@monaco-editor/react";
-import { getSocket } from "@/lib/socket";
+import { getSocket, waitForConnection } from "@/lib/socket";
 import type { Socket } from "socket.io-client";
 import type * as Monaco from "monaco-editor";
 import ChatSidebar from "./ChatSidebar";
+import ConnectionStatus from "./ConnectionStatus";
 import dynamic from "next/dynamic";
 
 const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
@@ -158,18 +159,39 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
   const isRemoteUpdate = useRef<boolean>(false);
   const decorationsRef = useRef<Map<string, string[]>>(new Map());
 
+  const showChatRef = useRef(false);
+  useEffect(() => { showChatRef.current = showChat; }, [showChat]);
+
   useEffect(() => {
+    let mounted = true;
     const socket = getSocket();
     socketRef.current = socket;
 
-    socket.on("connect", () => {
-      setIsConnected(true);
+    const joinRoom = () => {
       socket.emit("join-room", roomId);
+    };
+
+    socket.on("connect", () => {
+      if (!mounted) return;
+      setIsConnected(true);
+      joinRoom();
     });
 
     socket.on("disconnect", () => {
+      if (!mounted) return;
       setIsConnected(false);
     });
+
+    // Re-join room on reconnect
+    socket.io.on("reconnect", () => {
+      if (!mounted) return;
+      joinRoom();
+    });
+
+    // If already connected, join immediately
+    if (socket.connected) {
+      joinRoom();
+    }
 
     socket.on("room-data", (data: {
       code: string;
@@ -209,12 +231,11 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
       setUsers(data.users);
     });
 
-    socket.on("user-left", (data: { oderId: string; users: UserInfo[] }) => {
+    socket.on("user-left", (data: { userId: string; users: UserInfo[] }) => {
       setUsers(data.users);
-      // Remove cursor decoration
-      if (editorRef.current && decorationsRef.current.has(data.oderId)) {
-        editorRef.current.deltaDecorations(decorationsRef.current.get(data.oderId)!, []);
-        decorationsRef.current.delete(data.oderId);
+      if (editorRef.current && decorationsRef.current.has(data.userId)) {
+        editorRef.current.deltaDecorations(decorationsRef.current.get(data.userId)!, []);
+        decorationsRef.current.delete(data.userId);
       }
     });
 
@@ -232,7 +253,7 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
 
     socket.on("new-message", (message: ChatMessage) => {
       setMessages((prev) => [...prev, message]);
-      if (!showChat) {
+      if (!showChatRef.current) {
         setUnreadMessages((prev) => prev + 1);
       }
     });
@@ -269,6 +290,7 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
     });
 
     return () => {
+      mounted = false;
       socket.off("connect");
       socket.off("disconnect");
       socket.off("room-data");
@@ -281,8 +303,9 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
       socket.off("selection-update");
       socket.off("new-message");
       socket.off("incoming-call");
+      socket.io.off("reconnect");
     };
-  }, [roomId, showChat]);
+  }, [roomId]);
 
   // Set up ringtone for incoming calls
   useEffect(() => {
@@ -689,20 +712,16 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
         <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5 gap-2 sm:gap-0">
           <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
             <div className="flex items-center gap-2 sm:gap-4">
-              {/* Clickable Sharex Logo */}
               <button
                 onClick={() => router.push("/")}
                 className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
                 title="Go to Home"
               >
                 <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
-                  Sharex
+                  CodeNest
                 </span>
               </button>
-              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-400">
-                <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
-                <span className="hidden sm:inline">{isConnected ? "Connected" : "Disconnected"}</span>
-              </div>
+              <ConnectionStatus />
             </div>
             {/* User avatars */}
             <div className="flex -space-x-2">

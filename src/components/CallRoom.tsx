@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getSocket } from "@/lib/socket";
+import { getSocket, waitForConnection } from "@/lib/socket";
+import { getIceServers } from "@/lib/webrtc-config";
+import ConnectionStatus from "./ConnectionStatus";
 import type { Socket } from "socket.io-client";
 
 interface UserInfo {
@@ -33,20 +35,11 @@ interface CallRoomProps {
   callType: "audio" | "video";
 }
 
-const iceServers = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-  ],
-};
-
 const EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "🎉", "🔥", "💯"];
+const CONNECTION_TIMEOUT = 30000;
 
 export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const router = useRouter();
-  const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,12 +49,11 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const [copied, setCopied] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [floatingEmojis, setFloatingEmojis] = useState<FloatingEmoji[]>([]);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  // Call state
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
-  const [callStatus, setCallStatus] = useState<"connecting" | "waiting" | "connected">("connecting");
-  const [remoteUserId, setRemoteUserId] = useState<string | null>(null);
+  const [callStatus, setCallStatus] = useState<"connecting" | "waiting" | "connected" | "error">("connecting");
   const [remoteUserName, setRemoteUserName] = useState<string>("");
   const [isStreamReady, setIsStreamReady] = useState(false);
 
@@ -75,19 +67,37 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const remoteUserIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const userInfoRef = useRef<UserInfo | null>(null);
+  const showChatRef = useRef(false);
+  const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Keep remoteUserId ref in sync
-  useEffect(() => {
-    remoteUserIdRef.current = remoteUserId;
-  }, [remoteUserId]);
+  // Keep refs in sync without triggering re-renders
+  useEffect(() => { userInfoRef.current = userInfo; }, [userInfo]);
+  useEffect(() => { showChatRef.current = showChat; }, [showChat]);
 
-  // Scroll chat to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Cleanup on unmount
+  const clearConnectionTimeout = useCallback(() => {
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startConnectionTimeout = useCallback(() => {
+    clearConnectionTimeout();
+    connectionTimeoutRef.current = setTimeout(() => {
+      if (peerConnectionRef.current && peerConnectionRef.current.connectionState !== "connected") {
+        setCallStatus("error");
+        setConnectionError("Connection timed out. The other user may have connectivity issues.");
+      }
+    }, CONNECTION_TIMEOUT);
+  }, [clearConnectionTimeout]);
+
   const cleanup = useCallback(() => {
+    clearConnectionTimeout();
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
@@ -97,10 +107,11 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
       localStreamRef.current = null;
     }
     remoteStreamRef.current = null;
+    remoteUserIdRef.current = null;
+    pendingCandidatesRef.current = [];
     setIsStreamReady(false);
-  }, []);
+  }, [clearConnectionTimeout]);
 
-  // Start local media stream
   const startLocalStream = useCallback(async () => {
     try {
       setIsStreamReady(false);
@@ -123,9 +134,8 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   }, [callType]);
 
-  // Create WebRTC peer connection
   const createPeerConnection = useCallback(() => {
-    const pc = new RTCPeerConnection(iceServers);
+    const pc = new RTCPeerConnection(getIceServers());
 
     pc.onicecandidate = (event) => {
       if (event.candidate && remoteUserIdRef.current && socketRef.current) {
@@ -138,33 +148,30 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     };
 
     pc.ontrack = (event) => {
-      console.log("ontrack received:", event.streams[0]);
       remoteStreamRef.current = event.streams[0];
-
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = event.streams[0];
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = event.streams[0];
       }
-
+      clearConnectionTimeout();
       setCallStatus("connected");
     };
 
     pc.onconnectionstatechange = () => {
-      console.log("Connection state:", pc.connectionState);
       if (pc.connectionState === "connected") {
+        clearConnectionTimeout();
         setCallStatus("connected");
       } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
         cleanup();
         setCallStatus("waiting");
-        setRemoteUserId(null);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log("ICE connection state:", pc.iceConnectionState);
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        clearConnectionTimeout();
         setCallStatus("connected");
       }
     };
@@ -177,178 +184,192 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
 
     peerConnectionRef.current = pc;
     return pc;
-  }, [roomId, cleanup]);
+  }, [roomId, cleanup, clearConnectionTimeout]);
 
-  // Initialize socket and WebRTC
+  // Main socket effect — stable deps only (roomId, callType)
   useEffect(() => {
-    const socket = getSocket();
-    socketRef.current = socket;
+    let mounted = true;
 
-    socket.on("connect", () => {
-      setIsConnected(true);
+    const init = async () => {
+      const socket = await waitForConnection();
+      if (!mounted) return;
+      socketRef.current = socket;
+
       socket.emit("join-call-room", { roomId, callType });
-    });
 
-    socket.on("disconnect", () => {
-      setIsConnected(false);
-    });
+      socket.on("call-room-data", async (data: {
+        users: UserInfo[];
+        messages: ChatMessage[];
+        userInfo: UserInfo;
+      }) => {
+        if (!mounted) return;
+        setUsers(data.users);
+        setMessages(data.messages);
+        setUserInfo(data.userInfo);
+        userInfoRef.current = data.userInfo;
 
-    socket.on("call-room-data", async (data: {
-      users: UserInfo[];
-      messages: ChatMessage[];
-      userInfo: UserInfo;
-    }) => {
-      setUsers(data.users);
-      setMessages(data.messages);
-      setUserInfo(data.userInfo);
-
-      // Start local stream
-      try {
-        await startLocalStream();
-        setCallStatus("waiting");
-
-        // If other users are in the room, initiate call
-        const otherUsers = data.users.filter(u => u.id !== data.userInfo.id);
-        if (otherUsers.length > 0) {
-          // We'll be the one to initiate the call to the first other user
-          const targetUser = otherUsers[0];
-          setRemoteUserId(targetUser.id);
-          setRemoteUserName(targetUser.name);
-        }
-      } catch (error) {
-        console.error("Failed to start local stream:", error);
-      }
-    });
-
-    socket.on("user-joined-call", async (data: { user: UserInfo; users: UserInfo[] }) => {
-      setUsers(data.users);
-
-      // When a new user joins, initiate the call to them
-      if (userInfo && data.user.id !== userInfo.id && !peerConnectionRef.current) {
-        setRemoteUserId(data.user.id);
-        setRemoteUserName(data.user.name);
-
-        // Create peer connection and send offer
-        if (localStreamRef.current) {
-          const pc = createPeerConnection();
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-
-          socket.emit("webrtc-offer", {
-            roomId,
-            targetId: data.user.id,
-            offer,
-          });
-        }
-      }
-    });
-
-    socket.on("user-left-call", (data: { userId: string; users: UserInfo[] }) => {
-      setUsers(data.users);
-      if (data.userId === remoteUserIdRef.current) {
-        cleanup();
-        setCallStatus("waiting");
-        setRemoteUserId(null);
-      }
-    });
-
-    socket.on("webrtc-offer", async (data: { fromId: string; fromName: string; offer: RTCSessionDescriptionInit }) => {
-      setRemoteUserId(data.fromId);
-      setRemoteUserName(data.fromName);
-
-      if (!localStreamRef.current) {
         try {
           await startLocalStream();
+          if (!mounted) return;
+          setCallStatus("waiting");
+
+          const otherUsers = data.users.filter(u => u.id !== data.userInfo.id);
+          if (otherUsers.length > 0) {
+            const targetUser = otherUsers[0];
+            remoteUserIdRef.current = targetUser.id;
+            setRemoteUserName(targetUser.name);
+
+            // Deterministic offerer: smaller socket ID creates offer
+            if (data.userInfo.id < targetUser.id && localStreamRef.current) {
+              const pc = createPeerConnection();
+              startConnectionTimeout();
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              socket.emit("webrtc-offer", {
+                roomId,
+                targetId: targetUser.id,
+                offer,
+              });
+            }
+            // else: wait for the other peer to send offer
+          }
         } catch (error) {
           console.error("Failed to start local stream:", error);
-          return;
         }
-      }
-
-      const pc = createPeerConnection();
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-
-      // Process any pending ICE candidates
-      for (const candidate of pendingCandidatesRef.current) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-      pendingCandidatesRef.current = [];
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      socket.emit("webrtc-answer", {
-        roomId,
-        targetId: data.fromId,
-        answer,
       });
-    });
 
-    socket.on("webrtc-answer", async (data: { fromId: string; answer: RTCSessionDescriptionInit }) => {
-      const pc = peerConnectionRef.current;
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      socket.on("user-joined-call", async (data: { user: UserInfo; users: UserInfo[] }) => {
+        if (!mounted) return;
+        setUsers(data.users);
 
-        // Process any pending ICE candidates
+        const currentInfo = userInfoRef.current;
+        if (currentInfo && data.user.id !== currentInfo.id && !peerConnectionRef.current) {
+          remoteUserIdRef.current = data.user.id;
+          setRemoteUserName(data.user.name);
+
+          // Deterministic offerer: smaller socket ID creates offer
+          if (currentInfo.id < data.user.id && localStreamRef.current) {
+            const pc = createPeerConnection();
+            startConnectionTimeout();
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("webrtc-offer", {
+              roomId,
+              targetId: data.user.id,
+              offer,
+            });
+          }
+        }
+      });
+
+      socket.on("user-left-call", (data: { userId: string; users: UserInfo[] }) => {
+        if (!mounted) return;
+        setUsers(data.users);
+        if (data.userId === remoteUserIdRef.current) {
+          cleanup();
+          setCallStatus("waiting");
+        }
+      });
+
+      socket.on("webrtc-offer", async (data: { fromId: string; fromName: string; offer: RTCSessionDescriptionInit }) => {
+        if (!mounted) return;
+        remoteUserIdRef.current = data.fromId;
+        setRemoteUserName(data.fromName);
+
+        if (!localStreamRef.current) {
+          try {
+            await startLocalStream();
+          } catch (error) {
+            console.error("Failed to start local stream:", error);
+            return;
+          }
+        }
+
+        const pc = createPeerConnection();
+        startConnectionTimeout();
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+        // Flush pending ICE candidates
         for (const candidate of pendingCandidatesRef.current) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
         pendingCandidatesRef.current = [];
-      }
-    });
 
-    socket.on("webrtc-ice-candidate", async (data: { fromId: string; candidate: RTCIceCandidateInit }) => {
-      const pc = peerConnectionRef.current;
-      if (pc && pc.remoteDescription) {
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-      } else {
-        // Store candidate if remote description not set yet
-        pendingCandidatesRef.current.push(data.candidate);
-      }
-    });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
 
-    socket.on("new-message", (message: ChatMessage) => {
-      setMessages((prev) => [...prev, message]);
-      if (!showChat) {
-        setUnreadMessages((prev) => prev + 1);
-      }
-    });
+        socket.emit("webrtc-answer", {
+          roomId,
+          targetId: data.fromId,
+          answer,
+        });
+      });
 
-    socket.on("emoji-reaction", (data: { emoji: string; userName: string; userColor: string }) => {
-      const id = `${Date.now()}-${Math.random()}`;
-      const x = Math.random() * 80 + 10; // Random position 10-90%
-      setFloatingEmojis((prev) => [...prev, { id, emoji: data.emoji, userName: data.userName, userColor: data.userColor, x }]);
+      socket.on("webrtc-answer", async (data: { fromId: string; answer: RTCSessionDescriptionInit }) => {
+        const pc = peerConnectionRef.current;
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          for (const candidate of pendingCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          pendingCandidatesRef.current = [];
+        }
+      });
 
-      // Remove emoji after animation
-      setTimeout(() => {
-        setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
-      }, 3000);
-    });
+      socket.on("webrtc-ice-candidate", async (data: { fromId: string; candidate: RTCIceCandidateInit }) => {
+        const pc = peerConnectionRef.current;
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } else {
+          pendingCandidatesRef.current.push(data.candidate);
+        }
+      });
+
+      socket.on("new-message", (message: ChatMessage) => {
+        if (!mounted) return;
+        setMessages((prev) => [...prev, message]);
+        if (!showChatRef.current) {
+          setUnreadMessages((prev) => prev + 1);
+        }
+      });
+
+      socket.on("emoji-reaction", (data: { emoji: string; userName: string; userColor: string }) => {
+        if (!mounted) return;
+        const id = `${Date.now()}-${Math.random()}`;
+        const x = Math.random() * 80 + 10;
+        setFloatingEmojis((prev) => [...prev, { id, emoji: data.emoji, userName: data.userName, userColor: data.userColor, x }]);
+        setTimeout(() => {
+          setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
+        }, 3000);
+      });
+    };
+
+    init();
 
     return () => {
+      mounted = false;
       cleanup();
-      socket.emit("leave-call-room", roomId);
-      socket.off("connect");
-      socket.off("disconnect");
-      socket.off("call-room-data");
-      socket.off("user-joined-call");
-      socket.off("user-left-call");
-      socket.off("webrtc-offer");
-      socket.off("webrtc-answer");
-      socket.off("webrtc-ice-candidate");
-      socket.off("new-message");
-      socket.off("emoji-reaction");
+      const socket = socketRef.current;
+      if (socket) {
+        socket.emit("leave-call-room", roomId);
+        socket.off("call-room-data");
+        socket.off("user-joined-call");
+        socket.off("user-left-call");
+        socket.off("webrtc-offer");
+        socket.off("webrtc-answer");
+        socket.off("webrtc-ice-candidate");
+        socket.off("new-message");
+        socket.off("emoji-reaction");
+      }
     };
-  }, [roomId, callType, startLocalStream, createPeerConnection, cleanup, showChat, userInfo]);
+  }, [roomId, callType, startLocalStream, createPeerConnection, cleanup, startConnectionTimeout]);
 
-  // Apply local stream when video element becomes available
   useEffect(() => {
     if (localStreamRef.current && localVideoRef.current && callType === "video") {
       localVideoRef.current.srcObject = localStreamRef.current;
     }
   }, [callStatus, callType, isStreamReady]);
 
-  // Toggle audio
   const toggleAudio = () => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -359,7 +380,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   };
 
-  // Toggle video
   const toggleVideo = () => {
     if (localStreamRef.current) {
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
@@ -370,13 +390,19 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   };
 
-  // End call and return home
   const endCall = () => {
     cleanup();
     router.push("/");
   };
 
-  // Copy share link
+  const retryConnection = () => {
+    cleanup();
+    setConnectionError(null);
+    setCallStatus("connecting");
+    // Re-init will happen via the useEffect
+    window.location.reload();
+  };
+
   const copyShareLink = async () => {
     const url = window.location.href;
     try {
@@ -406,7 +432,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   };
 
-  // Send chat message
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (chatMessage.trim() && socketRef.current) {
@@ -415,7 +440,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   };
 
-  // Send emoji reaction
   const sendEmoji = (emoji: string) => {
     if (socketRef.current && userInfo) {
       socketRef.current.emit("emoji-reaction", { roomId, emoji });
@@ -423,7 +447,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }
   };
 
-  // Toggle chat
   const toggleChat = () => {
     setShowChat(!showChat);
     if (!showChat) {
@@ -445,17 +468,16 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
             className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
           >
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
-              Sharex
+              CodeNest
             </span>
           </button>
-          <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-400">
-            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-500" : "bg-red-500"}`} />
-            <span className="hidden sm:inline">{callType === "video" ? "Video Call" : "Audio Call"}</span>
-          </div>
+          <ConnectionStatus />
+          <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">
+            {callType === "video" ? "Video Call" : "Audio Call"}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* User avatars */}
           <div className="flex -space-x-2 mr-2">
             {users.slice(0, 4).map((user) => (
               <div
@@ -469,7 +491,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
             ))}
           </div>
 
-          {/* Share */}
           <button
             onClick={copyShareLink}
             className={`flex items-center gap-2 px-3 py-1.5 text-white text-xs sm:text-sm font-medium rounded-lg transition-all ${
@@ -490,7 +511,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
             <span className="hidden sm:inline">{copied ? "Copied!" : "Share"}</span>
           </button>
 
-          {/* Exit */}
           <button
             onClick={endCall}
             className="flex items-center gap-2 px-3 py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs sm:text-sm rounded-lg transition-colors"
@@ -525,110 +545,121 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
             ))}
           </div>
 
+          {/* Error State */}
+          {callStatus === "error" && (
+            <div className="flex-1 flex items-center justify-center p-6">
+              <div className="text-center max-w-sm">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <h3 className="text-white text-lg font-semibold mb-2">Connection Failed</h3>
+                <p className="text-gray-400 text-sm mb-4">{connectionError || "Could not establish a peer connection."}</p>
+                <button
+                  onClick={retryConnection}
+                  className="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Video Grid */}
-          <div className="flex-1 p-3 sm:p-6">
-            {callType === "video" ? (
-              <div className="h-full grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                {/* Local Video */}
-                <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    muted
-                    playsInline
-                    className="w-full h-full object-cover"
-                  />
-                  {!isStreamReady && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-                      <div className="text-center">
-                        <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                        <p className="text-gray-400 text-sm">Starting camera...</p>
-                      </div>
-                    </div>
-                  )}
-                  <div className="absolute bottom-3 left-3 flex items-center gap-2">
-                    <span className="px-2 py-1 bg-black/60 rounded text-white text-xs sm:text-sm">
-                      You {userInfo?.name ? `(${userInfo.name})` : ""}
-                    </span>
-                    {!isVideoEnabled && (
-                      <span className="px-2 py-1 bg-red-600/80 rounded text-white text-xs">Camera off</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Remote Video */}
-                <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
-                  <video
-                    ref={remoteVideoRef}
-                    autoPlay
-                    playsInline
-                    className={`w-full h-full object-cover ${callStatus !== "connected" ? "hidden" : ""}`}
-                  />
-                  {callStatus !== "connected" && (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <div className="text-center">
-                        <div className={`w-16 h-16 mx-auto mb-3 rounded-full bg-violet-600 flex items-center justify-center ${callStatus === "waiting" ? "animate-pulse" : ""}`}>
-                          <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
+          {callStatus !== "error" && (
+            <div className="flex-1 p-3 sm:p-6">
+              {callType === "video" ? (
+                <div className="h-full grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
+                    <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    {!isStreamReady && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                        <div className="text-center">
+                          <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                          <p className="text-gray-400 text-sm">Starting camera...</p>
                         </div>
-                        <p className="text-white text-sm font-medium mb-1">
-                          {callStatus === "connecting" ? "Connecting..." : "Waiting for others..."}
-                        </p>
-                        <p className="text-gray-400 text-xs">Share the link to invite</p>
                       </div>
+                    )}
+                    <div className="absolute bottom-3 left-3 flex items-center gap-2">
+                      <span className="px-2 py-1 bg-black/60 rounded text-white text-xs sm:text-sm">
+                        You {userInfo?.name ? `(${userInfo.name})` : ""}
+                      </span>
+                      {!isVideoEnabled && (
+                        <span className="px-2 py-1 bg-red-600/80 rounded text-white text-xs">Camera off</span>
+                      )}
                     </div>
-                  )}
-                  <span className="absolute bottom-3 left-3 px-2 py-1 bg-black/60 rounded text-white text-xs sm:text-sm">
-                    {remoteUserName || "Participant"}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              // Audio Call UI
-              <div className="h-full flex items-center justify-center">
-                <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
-                <div className="flex flex-col items-center">
-                  <div className="flex gap-8 sm:gap-12 mb-8">
-                    {/* Local User */}
-                    <div className="text-center">
-                      <div className={`w-20 h-20 sm:w-28 sm:h-28 mx-auto mb-3 rounded-full bg-gradient-to-br from-violet-600 to-violet-400 flex items-center justify-center ${!isAudioEnabled ? "ring-4 ring-red-500" : ""}`}>
-                        {userInfo ? (
-                          <span className="text-2xl sm:text-4xl font-bold text-white">{userInfo.name[0]}</span>
-                        ) : (
-                          <svg className="w-10 h-10 sm:w-14 sm:h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
-                        )}
-                      </div>
-                      <p className="text-white text-sm sm:text-base font-medium">{userInfo?.name || "You"}</p>
-                      {!isAudioEnabled && <p className="text-red-400 text-xs mt-1">Muted</p>}
-                    </div>
+                  </div>
 
-                    {/* Remote User */}
-                    <div className="text-center">
-                      <div className={`w-20 h-20 sm:w-28 sm:h-28 mx-auto mb-3 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-400 flex items-center justify-center ${callStatus === "waiting" ? "animate-pulse" : callStatus === "connected" ? "" : "opacity-50"}`}>
-                        {remoteUserName ? (
-                          <span className="text-2xl sm:text-4xl font-bold text-white">{remoteUserName[0]}</span>
-                        ) : (
-                          <svg className="w-10 h-10 sm:w-14 sm:h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
-                        )}
+                  <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      className={`w-full h-full object-cover ${callStatus !== "connected" ? "hidden" : ""}`}
+                    />
+                    {callStatus !== "connected" && (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <div className="text-center">
+                          <div className={`w-16 h-16 mx-auto mb-3 rounded-full bg-violet-600 flex items-center justify-center ${callStatus === "waiting" ? "animate-pulse" : ""}`}>
+                            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          </div>
+                          <p className="text-white text-sm font-medium mb-1">
+                            {callStatus === "connecting" ? "Connecting..." : "Waiting for others..."}
+                          </p>
+                          <p className="text-gray-400 text-xs">Share the link to invite</p>
+                        </div>
                       </div>
-                      <p className="text-white text-sm sm:text-base font-medium">{remoteUserName || "Waiting..."}</p>
-                      {callStatus === "waiting" && <p className="text-gray-400 text-xs mt-1">Waiting to join</p>}
-                      {callStatus === "connected" && <p className="text-emerald-400 text-xs mt-1">Connected</p>}
+                    )}
+                    <span className="absolute bottom-3 left-3 px-2 py-1 bg-black/60 rounded text-white text-xs sm:text-sm">
+                      {remoteUserName || "Participant"}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+                  <div className="flex flex-col items-center">
+                    <div className="flex gap-8 sm:gap-12 mb-8">
+                      <div className="text-center">
+                        <div className={`w-20 h-20 sm:w-28 sm:h-28 mx-auto mb-3 rounded-full bg-gradient-to-br from-violet-600 to-violet-400 flex items-center justify-center ${!isAudioEnabled ? "ring-4 ring-red-500" : ""}`}>
+                          {userInfo ? (
+                            <span className="text-2xl sm:text-4xl font-bold text-white">{userInfo.name[0]}</span>
+                          ) : (
+                            <svg className="w-10 h-10 sm:w-14 sm:h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          )}
+                        </div>
+                        <p className="text-white text-sm sm:text-base font-medium">{userInfo?.name || "You"}</p>
+                        {!isAudioEnabled && <p className="text-red-400 text-xs mt-1">Muted</p>}
+                      </div>
+
+                      <div className="text-center">
+                        <div className={`w-20 h-20 sm:w-28 sm:h-28 mx-auto mb-3 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-400 flex items-center justify-center ${callStatus === "waiting" ? "animate-pulse" : callStatus === "connected" ? "" : "opacity-50"}`}>
+                          {remoteUserName ? (
+                            <span className="text-2xl sm:text-4xl font-bold text-white">{remoteUserName[0]}</span>
+                          ) : (
+                            <svg className="w-10 h-10 sm:w-14 sm:h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          )}
+                        </div>
+                        <p className="text-white text-sm sm:text-base font-medium">{remoteUserName || "Waiting..."}</p>
+                        {callStatus === "waiting" && <p className="text-gray-400 text-xs mt-1">Waiting to join</p>}
+                        {callStatus === "connected" && <p className="text-emerald-400 text-xs mt-1">Connected</p>}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           {/* Controls */}
           <div className="p-4 sm:p-6 flex justify-center items-center gap-3 sm:gap-4 bg-[#12121a]/80">
-            {/* Mute */}
             <button
               onClick={toggleAudio}
               className={`p-3 sm:p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
@@ -646,7 +677,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               )}
             </button>
 
-            {/* Video Toggle (only for video calls) */}
             {callType === "video" && (
               <button
                 onClick={toggleVideo}
@@ -665,7 +695,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               </button>
             )}
 
-            {/* Emoji Picker */}
             <div className="relative">
               <button
                 onClick={() => setShowEmojiPicker(!showEmojiPicker)}
@@ -691,7 +720,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               )}
             </div>
 
-            {/* Chat Toggle */}
             <button
               onClick={toggleChat}
               className={`relative p-3 sm:p-4 rounded-full transition-colors ${showChat ? "bg-violet-600" : "bg-white/10 hover:bg-white/20"}`}
@@ -707,7 +735,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               )}
             </button>
 
-            {/* End Call */}
             <button
               onClick={endCall}
               className="p-3 sm:p-4 bg-red-600 hover:bg-red-500 rounded-full transition-colors"
@@ -723,7 +750,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
         {/* Chat Sidebar */}
         {showChat && (
           <div className="w-full sm:w-1/3 lg:w-1/4 min-w-[280px] bg-[#12121a] border-l border-white/5 flex flex-col">
-            {/* Chat Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
               <h3 className="font-semibold text-white">Chat</h3>
               <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-white p-1 sm:hidden">
@@ -733,7 +759,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               </button>
             </div>
 
-            {/* Online Users */}
             <div className="px-4 py-3 border-b border-white/5">
               <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">In call ({users.length})</p>
               <div className="flex flex-wrap gap-2">
@@ -751,7 +776,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               </div>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {messages.length === 0 ? (
                 <div className="text-center text-gray-500 text-sm py-8">
@@ -784,7 +808,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Chat Input */}
             <form onSubmit={handleSendMessage} className="p-4 border-t border-white/5">
               <div className="flex gap-2">
                 <input
@@ -810,7 +833,6 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
         )}
       </div>
 
-      {/* CSS for floating emoji animation */}
       <style jsx global>{`
         @keyframes float-up {
           0% {

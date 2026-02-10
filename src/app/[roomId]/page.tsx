@@ -2,6 +2,7 @@
 
 import { use, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { useUser } from "@/lib/user-context";
 import dynamic from "next/dynamic";
 
 const CodeEditor = dynamic(() => import("@/components/CodeEditor"), {
@@ -17,6 +18,10 @@ const FileShare = dynamic(() => import("@/components/FileShare"), {
 const CallRoom = dynamic(() => import("@/components/CallRoom"), {
   ssr: false,
   loading: () => <LoadingScreen />,
+});
+
+const UsernameModal = dynamic(() => import("@/components/UsernameModal"), {
+  ssr: false,
 });
 
 function LoadingScreen() {
@@ -37,8 +42,8 @@ interface PageProps {
 export default function RoomPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const searchParams = useSearchParams();
+  const { hasUsername } = useUser();
 
-  // Compute initial values from URL params
   const initialType = useMemo(() => {
     const type = searchParams.get("type");
     return type === "code" || type === "file" || type === "call" ? type : null;
@@ -51,17 +56,29 @@ export default function RoomPage({ params }: PageProps) {
 
   const [roomType, setRoomType] = useState<"code" | "file" | "call" | null>(initialType);
   const [isSelecting, setIsSelecting] = useState(initialType === null);
+  const [usernameReady, setUsernameReady] = useState(false);
 
   const selectType = (type: "code" | "file" | "call", callType?: "audio" | "video") => {
     setRoomType(type);
     setIsSelecting(false);
-    // Update URL without reload
     if (type === "call" && callType) {
       window.history.replaceState({}, "", `/${resolvedParams.roomId}?type=call&call=${callType}`);
     } else {
       window.history.replaceState({}, "", `/${resolvedParams.roomId}?type=${type}`);
     }
   };
+
+  // Username gating for call and file rooms
+  const needsUsername = roomType === "call" || roomType === "file";
+  const showUsernameModal = needsUsername && !hasUsername && !usernameReady;
+
+  if (showUsernameModal) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center p-4">
+        <UsernameModal onComplete={() => setUsernameReady(true)} />
+      </div>
+    );
+  }
 
   if (isSelecting) {
     return (
@@ -73,7 +90,7 @@ export default function RoomPage({ params }: PageProps) {
           <div className="text-center mb-10">
             <h1 className="text-4xl font-bold mb-3">
               <span className="bg-gradient-to-r from-violet-400 via-fuchsia-400 to-cyan-400 bg-clip-text text-transparent">
-                Sharex
+                CodeNest
               </span>
             </h1>
             <p className="text-gray-400">

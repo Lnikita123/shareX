@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { UserProvider } from "@/lib/user-context";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sharex - Real-time Code & File Sharing",
-  description: "Share code and files in real-time with anyone, anywhere. Support for 20+ programming languages and file transfers up to 4MB.",
+  title: "CodeNest - Code. Share. Call. Together.",
+  description: "Real-time collaborative code editing, file sharing, and audio/video calls. No sign up required.",
 };
 
 export default function RootLayout({
@@ -27,7 +28,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <UserProvider>{children}</UserProvider>
       </body>
     </html>
   );
