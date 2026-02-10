@@ -107,7 +107,15 @@ interface FileRoomData {
   createdAt: number;
 }
 
-type RoomData = CodeRoomData | FileRoomData;
+interface CallRoomData {
+  type: "call";
+  callType: "audio" | "video";
+  users: Map<string, UserInfo>;
+  messages: ChatMessage[];
+  createdAt: number;
+}
+
+type RoomData = CodeRoomData | FileRoomData | CallRoomData;
 
 const rooms: Map<string, RoomData> = new Map();
 
@@ -386,6 +394,93 @@ app.prepare().then(() => {
       }
     });
 
+    // Call room handlers
+    socket.on("join-call-room", (data: { roomId: string; callType: "audio" | "video" }) => {
+      try {
+        const { roomId, callType } = data;
+        currentRoom = roomId;
+        socket.join(roomId);
+
+        const now = Date.now();
+        if (!rooms.has(roomId)) {
+          rooms.set(roomId, {
+            type: "call",
+            callType,
+            users: new Map([[socket.id, userInfo]]),
+            messages: [],
+            createdAt: now,
+          });
+        } else {
+          const room = rooms.get(roomId)!;
+          if (room.users.size >= MAX_ROOM_SIZE) {
+            socket.emit("room-error", { message: "Room is full (max 50 users)" });
+            socket.leave(roomId);
+            currentRoom = null;
+            return;
+          }
+          room.users.set(socket.id, userInfo);
+        }
+
+        const roomData = rooms.get(roomId)! as CallRoomData;
+        socket.emit("call-room-data", {
+          users: Array.from(roomData.users.values()),
+          messages: roomData.messages.slice(-50),
+          userInfo,
+        });
+
+        socket.to(roomId).emit("user-joined-call", {
+          user: userInfo,
+          users: Array.from(roomData.users.values()),
+        });
+
+        console.log(`User ${userInfo.name} joined call room ${roomId}. Users: ${roomData.users.size}`);
+      } catch (err) {
+        console.error("Error in join-call-room:", err);
+      }
+    });
+
+    socket.on("leave-call-room", (roomId: string) => {
+      try {
+        if (rooms.has(roomId)) {
+          const roomData = rooms.get(roomId)!;
+          roomData.users.delete(socket.id);
+          socket.to(roomId).emit("user-left-call", {
+            userId: socket.id,
+            users: Array.from(roomData.users.values()),
+          });
+          socket.leave(roomId);
+          if (currentRoom === roomId) {
+            currentRoom = null;
+          }
+
+          if (roomData.users.size === 0) {
+            const roomToDelete = roomId;
+            setTimeout(() => {
+              if (rooms.has(roomToDelete) && rooms.get(roomToDelete)!.users.size === 0) {
+                rooms.delete(roomToDelete);
+                console.log(`Call room ${roomToDelete} deleted (empty)`);
+              }
+            }, 5 * 60 * 1000);
+          }
+        }
+      } catch (err) {
+        console.error("Error in leave-call-room:", err);
+      }
+    });
+
+    socket.on("emoji-reaction", (data: { roomId: string; emoji: string }) => {
+      try {
+        const { roomId, emoji } = data;
+        io.to(roomId).emit("emoji-reaction", {
+          emoji,
+          userName: userInfo.name,
+          userColor: userInfo.color,
+        });
+      } catch (err) {
+        console.error("Error in emoji-reaction:", err);
+      }
+    });
+
     // File room handlers
     socket.on("join-file-room", (roomId: string) => {
       try {
@@ -470,11 +565,18 @@ app.prepare().then(() => {
           const roomData = rooms.get(currentRoom)!;
           roomData.users.delete(socket.id);
 
-          const userData = roomData.type === "code"
-            ? { userId: socket.id, users: Array.from(roomData.users.values()) }
-            : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
+          if (roomData.type === "call") {
+            socket.to(currentRoom).emit("user-left-call", {
+              userId: socket.id,
+              users: Array.from(roomData.users.values()),
+            });
+          } else {
+            const userData = roomData.type === "code"
+              ? { userId: socket.id, users: Array.from(roomData.users.values()) }
+              : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
 
-          socket.to(currentRoom).emit("user-left", userData);
+            socket.to(currentRoom).emit("user-left", userData);
+          }
 
           if (roomData.users.size === 0) {
             const roomToDelete = currentRoom;

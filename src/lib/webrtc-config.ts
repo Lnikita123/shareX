@@ -37,5 +37,6 @@ export function getIceServers(): RTCConfiguration {
   return {
     iceServers,
     iceCandidatePoolSize: 10,
+    iceTransportPolicy: "all" as RTCIceTransportPolicy,
   };
 }
