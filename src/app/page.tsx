@@ -13,11 +13,7 @@ export default function Home() {
   const createNewRoom = (type: "code" | "file" | "call", callType?: "audio" | "video") => {
     setIsCreating(true);
     const newRoomId = nanoid(10);
-    if (type === "call" && callType) {
-      router.push(`/${newRoomId}?type=call&call=${callType}`);
-    } else {
-      router.push(`/${newRoomId}?type=${type}`);
-    }
+    router.push(`/${newRoomId}?tab=${type}${callType ? `&call=${callType}` : ""}`);
   };
 
   const joinRoom = (e: React.FormEvent) => {

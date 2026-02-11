@@ -117,6 +117,11 @@ interface CallRoomData {
 
 type RoomData = CodeRoomData | FileRoomData | CallRoomData;
 
+function roomKey(roomId: string, type: string): string {
+  if (type === "code") return roomId;
+  return `${roomId}:${type}`;
+}
+
 const rooms: Map<string, RoomData> = new Map();
 
 app.prepare().then(() => {
@@ -137,7 +142,7 @@ app.prepare().then(() => {
 
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
-    let currentRoom: string | null = null;
+    const currentRooms = new Set<string>();
     const userInfo: UserInfo = {
       id: socket.id,
       name: generateUsername(),
@@ -148,12 +153,14 @@ app.prepare().then(() => {
     socket.on("set-username", (name: string) => {
       try {
         userInfo.name = name.slice(0, 20);
-        if (currentRoom && rooms.has(currentRoom)) {
-          const room = rooms.get(currentRoom)!;
-          room.users.set(socket.id, userInfo);
-          io.to(currentRoom).emit("users-update", {
-            users: Array.from(room.users.values()),
-          });
+        for (const key of currentRooms) {
+          if (rooms.has(key)) {
+            const room = rooms.get(key)!;
+            room.users.set(socket.id, userInfo);
+            io.to(key).emit("users-update", {
+              users: Array.from(room.users.values()),
+            });
+          }
         }
       } catch (err) {
         console.error("Error in set-username:", err);
@@ -163,7 +170,7 @@ app.prepare().then(() => {
     // Code room handlers
     socket.on("join-room", (roomId: string) => {
       try {
-        currentRoom = roomId;
+        currentRooms.add(roomId);
         socket.join(roomId);
 
         const now = Date.now();
@@ -182,7 +189,7 @@ app.prepare().then(() => {
           if (room.users.size >= MAX_ROOM_SIZE) {
             socket.emit("room-error", { message: "Room is full (max 50 users)" });
             socket.leave(roomId);
-            currentRoom = null;
+            currentRooms.delete(roomId);
             return;
           }
           room.users.set(socket.id, userInfo);
@@ -298,11 +305,12 @@ app.prepare().then(() => {
     });
 
     // Chat
-    socket.on("chat-message", (data: { roomId: string; message: string }) => {
+    socket.on("chat-message", (data: { roomId: string; message: string; roomType?: string }) => {
       try {
         if (!checkRateLimit(socket.id, "chat-message")) return;
         const { roomId, message } = data;
-        const room = rooms.get(roomId);
+        const key = roomKey(roomId, data.roomType || "code");
+        const room = rooms.get(key);
         if (room && message.trim()) {
           const chatMessage: ChatMessage = {
             id: `${Date.now()}-${socket.id}`,
@@ -316,7 +324,7 @@ app.prepare().then(() => {
           if (room.messages.length > 100) {
             room.messages = room.messages.slice(-100);
           }
-          io.to(roomId).emit("new-message", chatMessage);
+          io.to(key).emit("new-message", chatMessage);
         }
       } catch (err) {
         console.error("Error in chat-message:", err);
@@ -398,12 +406,13 @@ app.prepare().then(() => {
     socket.on("join-call-room", (data: { roomId: string; callType: "audio" | "video" }) => {
       try {
         const { roomId, callType } = data;
-        currentRoom = roomId;
-        socket.join(roomId);
+        const key = roomKey(roomId, "call");
+        currentRooms.add(key);
+        socket.join(key);
 
         const now = Date.now();
-        if (!rooms.has(roomId)) {
-          rooms.set(roomId, {
+        if (!rooms.has(key)) {
+          rooms.set(key, {
             type: "call",
             callType,
             users: new Map([[socket.id, userInfo]]),
@@ -411,29 +420,29 @@ app.prepare().then(() => {
             createdAt: now,
           });
         } else {
-          const room = rooms.get(roomId)!;
+          const room = rooms.get(key)!;
           if (room.users.size >= MAX_ROOM_SIZE) {
             socket.emit("room-error", { message: "Room is full (max 50 users)" });
-            socket.leave(roomId);
-            currentRoom = null;
+            socket.leave(key);
+            currentRooms.delete(key);
             return;
           }
           room.users.set(socket.id, userInfo);
         }
 
-        const roomData = rooms.get(roomId)! as CallRoomData;
+        const roomData = rooms.get(key)! as CallRoomData;
         socket.emit("call-room-data", {
           users: Array.from(roomData.users.values()),
           messages: roomData.messages.slice(-50),
           userInfo,
         });
 
-        socket.to(roomId).emit("user-joined-call", {
+        socket.to(key).emit("user-joined-call", {
           user: userInfo,
           users: Array.from(roomData.users.values()),
         });
 
-        console.log(`User ${userInfo.name} joined call room ${roomId}. Users: ${roomData.users.size}`);
+        console.log(`User ${userInfo.name} joined call room ${key}. Users: ${roomData.users.size}`);
       } catch (err) {
         console.error("Error in join-call-room:", err);
       }
@@ -441,20 +450,19 @@ app.prepare().then(() => {
 
     socket.on("leave-call-room", (roomId: string) => {
       try {
-        if (rooms.has(roomId)) {
-          const roomData = rooms.get(roomId)!;
+        const key = roomKey(roomId, "call");
+        if (rooms.has(key)) {
+          const roomData = rooms.get(key)!;
           roomData.users.delete(socket.id);
-          socket.to(roomId).emit("user-left-call", {
+          socket.to(key).emit("user-left-call", {
             userId: socket.id,
             users: Array.from(roomData.users.values()),
           });
-          socket.leave(roomId);
-          if (currentRoom === roomId) {
-            currentRoom = null;
-          }
+          socket.leave(key);
+          currentRooms.delete(key);
 
           if (roomData.users.size === 0) {
-            const roomToDelete = roomId;
+            const roomToDelete = key;
             setTimeout(() => {
               if (rooms.has(roomToDelete) && rooms.get(roomToDelete)!.users.size === 0) {
                 rooms.delete(roomToDelete);
@@ -471,7 +479,8 @@ app.prepare().then(() => {
     socket.on("emoji-reaction", (data: { roomId: string; emoji: string }) => {
       try {
         const { roomId, emoji } = data;
-        io.to(roomId).emit("emoji-reaction", {
+        const key = roomKey(roomId, "call");
+        io.to(key).emit("emoji-reaction", {
           emoji,
           userName: userInfo.name,
           userColor: userInfo.color,
@@ -484,12 +493,13 @@ app.prepare().then(() => {
     // File room handlers
     socket.on("join-file-room", (roomId: string) => {
       try {
-        currentRoom = roomId;
-        socket.join(roomId);
+        const key = roomKey(roomId, "file");
+        currentRooms.add(key);
+        socket.join(key);
 
         const now = Date.now();
-        if (!rooms.has(roomId)) {
-          rooms.set(roomId, {
+        if (!rooms.has(key)) {
+          rooms.set(key, {
             type: "file",
             file: null,
             users: new Map([[socket.id, userInfo]]),
@@ -497,17 +507,17 @@ app.prepare().then(() => {
             createdAt: now,
           });
         } else {
-          const room = rooms.get(roomId)!;
+          const room = rooms.get(key)!;
           if (room.users.size >= MAX_ROOM_SIZE) {
             socket.emit("room-error", { message: "Room is full (max 50 users)" });
-            socket.leave(roomId);
-            currentRoom = null;
+            socket.leave(key);
+            currentRooms.delete(key);
             return;
           }
           room.users.set(socket.id, userInfo);
         }
 
-        const roomData = rooms.get(roomId)! as FileRoomData;
+        const roomData = rooms.get(key)! as FileRoomData;
         socket.emit("file-room-data", {
           file: roomData.file,
           userCount: roomData.users.size,
@@ -515,13 +525,13 @@ app.prepare().then(() => {
           userInfo,
         });
 
-        socket.to(roomId).emit("user-joined", {
+        socket.to(key).emit("user-joined", {
           user: userInfo,
           userCount: roomData.users.size,
           users: Array.from(roomData.users.values()),
         });
 
-        console.log(`User ${userInfo.name} joined file room ${roomId}. Users: ${roomData.users.size}`);
+        console.log(`User ${userInfo.name} joined file room ${key}. Users: ${roomData.users.size}`);
       } catch (err) {
         console.error("Error in join-file-room:", err);
       }
@@ -530,12 +540,13 @@ app.prepare().then(() => {
     socket.on("file-upload", (data: { roomId: string; file: FileData }) => {
       try {
         const { roomId, file } = data;
-        const room = rooms.get(roomId);
+        const key = roomKey(roomId, "file");
+        const room = rooms.get(key);
         if (room && room.type === "file") {
           if (file.size <= MAX_FILE_SIZE) {
             room.file = file;
-            socket.to(roomId).emit("file-update", { file });
-            console.log(`File uploaded to room ${roomId}: ${file.name} (${file.size} bytes)`);
+            socket.to(key).emit("file-update", { file });
+            console.log(`File uploaded to room ${key}: ${file.name} (${file.size} bytes)`);
           }
         }
       } catch (err) {
@@ -546,11 +557,12 @@ app.prepare().then(() => {
     socket.on("file-remove", (data: { roomId: string }) => {
       try {
         const { roomId } = data;
-        const room = rooms.get(roomId);
+        const key = roomKey(roomId, "file");
+        const room = rooms.get(key);
         if (room && room.type === "file") {
           room.file = null;
-          io.to(roomId).emit("file-removed");
-          console.log(`File removed from room ${roomId}`);
+          io.to(key).emit("file-removed");
+          console.log(`File removed from room ${key}`);
         }
       } catch (err) {
         console.error("Error in file-remove:", err);
@@ -561,33 +573,36 @@ app.prepare().then(() => {
       try {
         console.log("Client disconnected:", socket.id);
         rateLimiters.delete(socket.id);
-        if (currentRoom && rooms.has(currentRoom)) {
-          const roomData = rooms.get(currentRoom)!;
-          roomData.users.delete(socket.id);
+        for (const key of currentRooms) {
+          if (rooms.has(key)) {
+            const roomData = rooms.get(key)!;
+            roomData.users.delete(socket.id);
 
-          if (roomData.type === "call") {
-            socket.to(currentRoom).emit("user-left-call", {
-              userId: socket.id,
-              users: Array.from(roomData.users.values()),
-            });
-          } else {
-            const userData = roomData.type === "code"
-              ? { userId: socket.id, users: Array.from(roomData.users.values()) }
-              : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
+            if (roomData.type === "call") {
+              socket.to(key).emit("user-left-call", {
+                userId: socket.id,
+                users: Array.from(roomData.users.values()),
+              });
+            } else {
+              const userData = roomData.type === "code"
+                ? { userId: socket.id, users: Array.from(roomData.users.values()) }
+                : { userId: socket.id, users: Array.from(roomData.users.values()), userCount: roomData.users.size };
 
-            socket.to(currentRoom).emit("user-left", userData);
-          }
+              socket.to(key).emit("user-left", userData);
+            }
 
-          if (roomData.users.size === 0) {
-            const roomToDelete = currentRoom;
-            setTimeout(() => {
-              if (rooms.has(roomToDelete) && rooms.get(roomToDelete)!.users.size === 0) {
-                rooms.delete(roomToDelete);
-                console.log(`Room ${roomToDelete} deleted (empty)`);
-              }
-            }, 5 * 60 * 1000);
+            if (roomData.users.size === 0) {
+              const roomToDelete = key;
+              setTimeout(() => {
+                if (rooms.has(roomToDelete) && rooms.get(roomToDelete)!.users.size === 0) {
+                  rooms.delete(roomToDelete);
+                  console.log(`Room ${roomToDelete} deleted (empty)`);
+                }
+              }, 5 * 60 * 1000);
+            }
           }
         }
+        currentRooms.clear();
       } catch (err) {
         console.error("Error in disconnect:", err);
       }

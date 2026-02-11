@@ -11,6 +11,7 @@ const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
 
 interface FileShareProps {
   roomId: string;
+  embedded?: boolean;
 }
 
 interface FileData {
@@ -35,7 +36,7 @@ const formatSize = (bytes: number) => {
   return (bytes / (1024 * 1024)).toFixed(2) + " MB";
 };
 
-export default function FileShare({ roomId }: FileShareProps) {
+export default function FileShare({ roomId, embedded }: FileShareProps) {
   const router = useRouter();
   const [file, setFile] = useState<FileData | null>(null);
   const [userCount, setUserCount] = useState<number>(1);
@@ -312,19 +313,16 @@ export default function FileShare({ roomId }: FileShareProps) {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#0a0a0f]">
-      {/* Header */}
+    <div className={`flex flex-col ${embedded ? "h-full" : "h-screen"} bg-[#0a0a0f]`}>
+      {/* Header - hidden in embedded mode */}
+      {!embedded && (
       <header className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5">
         <div className="flex items-center gap-2 sm:gap-4">
-          <button
-            onClick={() => router.push("/")}
-            className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
-            title="Go to Home"
-          >
+          <span className="text-lg sm:text-xl font-bold">
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
               CodeNest
             </span>
-          </button>
+          </span>
           <ConnectionStatus />
         </div>
 
@@ -371,6 +369,7 @@ export default function FileShare({ roomId }: FileShareProps) {
           </button>
         </div>
       </header>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
@@ -489,7 +488,8 @@ export default function FileShare({ roomId }: FileShareProps) {
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer - hidden in embedded mode */}
+      {!embedded && (
       <footer className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-violet-600/90 to-cyan-600/90 text-white text-sm">
         <div className="flex items-center gap-4">
           <span className="opacity-80">Room: {roomId}</span>
@@ -499,6 +499,7 @@ export default function FileShare({ roomId }: FileShareProps) {
           {file ? `${file.name} (${formatSize(file.size)})` : "No file uploaded"}
         </div>
       </footer>
+      )}
 
       {/* Video Call Modal */}
       {showVideoCall && socketRef.current && userInfo && (

@@ -33,6 +33,8 @@ interface FloatingEmoji {
 interface CallRoomProps {
   roomId: string;
   callType: "audio" | "video";
+  embedded?: boolean;
+  onEndCall?: () => void;
 }
 
 interface PeerState {
@@ -54,11 +56,11 @@ interface PeerUIState {
 }
 
 const EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "🎉", "🔥", "💯"];
-const CONNECTION_TIMEOUT = 30000;
+const CONNECTION_TIMEOUT = 15000;
 const MAX_MESH_PEERS = 6;
 const DISCONNECT_GRACE_MS = 5000;
 
-export default function CallRoom({ roomId, callType }: CallRoomProps) {
+export default function CallRoom({ roomId, callType, embedded, onEndCall }: CallRoomProps) {
   const router = useRouter();
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
@@ -85,6 +87,7 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const showChatRef = useRef(false);
   const mountedRef = useRef(true);
   const disconnectGraceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const earlyIceCandidates = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
 
   useEffect(() => { userInfoRef.current = userInfo; }, [userInfo]);
   useEffect(() => { showChatRef.current = showChat; }, [showChat]);
@@ -115,6 +118,7 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
       peersRef.current.delete(peerId);
       syncPeerStates();
     }
+    earlyIceCandidates.current.delete(peerId);
     const graceTimer = disconnectGraceTimers.current.get(peerId);
     if (graceTimer) {
       clearTimeout(graceTimer);
@@ -128,6 +132,7 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
       peer.pc.close();
     });
     peersRef.current.clear();
+    earlyIceCandidates.current.clear();
     disconnectGraceTimers.current.forEach((timer) => clearTimeout(timer));
     disconnectGraceTimers.current.clear();
     if (localStreamRef.current) {
@@ -157,6 +162,12 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const createPeerConnectionForPeer = useCallback((peerId: string, userName: string, userColor: string): PeerState => {
     const existing = peersRef.current.get(peerId);
     if (existing) {
+      // Don't replace an already-connected peer
+      if (existing.connectionStatus === "connected") {
+        existing.userName = userName || existing.userName;
+        existing.userColor = userColor || existing.userColor;
+        return existing;
+      }
       if (existing.connectionTimeout) clearTimeout(existing.connectionTimeout);
       existing.pc.close();
     }
@@ -257,6 +268,16 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
     }, CONNECTION_TIMEOUT);
 
     peersRef.current.set(peerId, peerState);
+
+    // Drain any ICE candidates that arrived before this peer was created
+    const buffered = earlyIceCandidates.current.get(peerId);
+    if (buffered && buffered.length > 0) {
+      earlyIceCandidates.current.delete(peerId);
+      for (const candidate of buffered) {
+        peerState.pendingCandidates.push(candidate);
+      }
+    }
+
     syncPeerStates();
     return peerState;
   }, [roomId, syncPeerStates, removePeer]);
@@ -406,8 +427,11 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
       socket.on("webrtc-ice-candidate", async (data: { fromId: string; candidate: RTCIceCandidateInit }) => {
         const peer = peersRef.current.get(data.fromId);
         if (!peer) {
-          // No peer yet — ICE arrived before offer, ignore
-          console.warn(`ICE candidate from unknown peer ${data.fromId} — ignoring`);
+          // Buffer ICE candidates from peers that don't exist yet
+          if (!earlyIceCandidates.current.has(data.fromId)) {
+            earlyIceCandidates.current.set(data.fromId, []);
+          }
+          earlyIceCandidates.current.get(data.fromId)!.push(data.candidate);
           return;
         }
         if (peer.pc.remoteDescription) {
@@ -489,7 +513,11 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
 
   const endCall = () => {
     cleanup();
-    router.push("/");
+    if (onEndCall) {
+      onEndCall();
+    } else {
+      router.push("/");
+    }
   };
 
   const retryConnection = () => {
@@ -530,7 +558,7 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (chatMessage.trim() && socketRef.current) {
-      socketRef.current.emit("chat-message", { roomId, message: chatMessage });
+      socketRef.current.emit("chat-message", { roomId, message: chatMessage, roomType: "call" });
       setChatMessage("");
     }
   };
@@ -593,18 +621,16 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
   const peerEntries = Array.from(peerStates.entries());
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] flex flex-col">
-      {/* Header */}
+    <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#0a0a0f] flex flex-col`}>
+      {/* Header - hidden in embedded mode */}
+      {!embedded && (
       <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-[#12121a] border-b border-white/5">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push("/")}
-            className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
-          >
+          <span className="text-lg sm:text-xl font-bold">
             <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
               CodeNest
             </span>
-          </button>
+          </span>
           <ConnectionStatus />
           <span className="text-xs sm:text-sm text-gray-500 hidden sm:inline">
             {callType === "video" ? "Video Call" : "Audio Call"}
@@ -661,6 +687,7 @@ export default function CallRoom({ roomId, callType }: CallRoomProps) {
           </button>
         </div>
       </header>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex relative overflow-hidden">

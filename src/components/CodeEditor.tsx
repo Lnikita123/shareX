@@ -15,6 +15,7 @@ const VideoCall = dynamic(() => import("./VideoCall"), { ssr: false });
 interface CodeEditorProps {
   roomId: string;
   autoCall?: "audio" | "video" | null;
+  embedded?: boolean;
 }
 
 interface UserInfo {
@@ -130,7 +131,7 @@ const defineThemes = (monaco: typeof Monaco) => {
   });
 };
 
-export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
+export default function CodeEditor({ roomId, autoCall, embedded }: CodeEditorProps) {
   const router = useRouter();
   const [code, setCode] = useState<string>("// Start coding here...\n");
   const [language, setLanguage] = useState<string>("javascript");
@@ -706,21 +707,18 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
   const currentTheme = THEMES.find((t) => t.value === theme);
 
   return (
-    <div className="flex h-screen bg-[#0a0a0f]">
+    <div className={`flex ${embedded ? "h-full" : "h-screen"} bg-[#0a0a0f]`}>
       <div className="flex flex-col flex-1">
         {/* Header */}
-        <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5 gap-2 sm:gap-0">
+        <header className={`flex ${embedded ? "" : "flex-col sm:flex-row items-start sm:items-center justify-between"} px-2 sm:px-4 py-2 sm:py-3 bg-[#12121a] border-b border-white/5 gap-2 sm:gap-0`}>
+          {!embedded && (
           <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
             <div className="flex items-center gap-2 sm:gap-4">
-              <button
-                onClick={() => router.push("/")}
-                className="text-lg sm:text-xl font-bold hover:opacity-80 transition-opacity"
-                title="Go to Home"
-              >
+              <span className="text-lg sm:text-xl font-bold">
                 <span className="bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent">
                   CodeNest
                 </span>
-              </button>
+              </span>
               <ConnectionStatus />
             </div>
             {/* User avatars */}
@@ -742,6 +740,7 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
               )}
             </div>
           </div>
+          )}
 
           <div className="flex items-center gap-1 sm:gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
             {/* Language */}
@@ -827,7 +826,8 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
               )}
             </button>
 
-            {/* Share */}
+            {/* Share - hidden in embedded mode */}
+            {!embedded && (
             <button
               onClick={copyShareLink}
               className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 text-white text-xs sm:text-sm font-medium rounded-lg transition-all shadow-lg flex-shrink-0 ${
@@ -847,8 +847,10 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
               )}
               {copied ? "Copied!" : "Share"}
             </button>
+            )}
 
-            {/* Exit */}
+            {/* Exit - hidden in embedded mode */}
+            {!embedded && (
             <button
               onClick={() => router.push("/")}
               className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs sm:text-sm rounded-lg transition-colors flex-shrink-0"
@@ -859,6 +861,7 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
               </svg>
               <span className="hidden sm:inline">Exit</span>
             </button>
+            )}
           </div>
         </header>
 
@@ -912,7 +915,8 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
 
         </div>
 
-        {/* Footer */}
+        {/* Footer - hidden in embedded mode */}
+        {!embedded && (
         <footer className="flex items-center justify-between px-2 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-violet-600/90 to-cyan-600/90 text-white text-xs sm:text-sm">
           <div className="flex items-center gap-2 sm:gap-4">
             <span className="opacity-80 truncate max-w-[80px] sm:max-w-none">Room: {roomId}</span>
@@ -925,6 +929,7 @@ export default function CodeEditor({ roomId, autoCall }: CodeEditorProps) {
             <span className="opacity-80 hidden sm:inline">{currentTheme?.label}</span>
           </div>
         </footer>
+        )}
       </div>
 
       {/* Chat Sidebar */}
