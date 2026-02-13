@@ -58,19 +58,30 @@ export default function FileShare({ roomId, embedded }: FileShareProps) {
     const socket = getSocket();
     socketRef.current = socket;
 
-    socket.on("connect", () => {
+    const joinRoom = () => {
       setIsConnected(true);
       socket.emit("join-file-room", roomId);
-    });
+    };
+
+    socket.on("connect", joinRoom);
+
+    // If already connected, join immediately (socket may have connected
+    // before this component mounted, so the "connect" event won't fire again)
+    if (socket.connected) {
+      joinRoom();
+    }
 
     socket.on("disconnect", () => {
       setIsConnected(false);
     });
 
-    socket.on("file-room-data", (data: { file: FileData | null; userCount: number; userInfo: UserInfo }) => {
+    socket.on("file-room-data", (data: { file: FileData | null; userCount: number; users: UserInfo[]; userInfo: UserInfo }) => {
       setFile(data.file);
       setUserCount(data.userCount);
       setUserInfo(data.userInfo);
+      if (data.users) {
+        setUsers(data.users);
+      }
     });
 
     socket.on("file-update", (data: { file: FileData }) => {
@@ -81,8 +92,11 @@ export default function FileShare({ roomId, embedded }: FileShareProps) {
       setFile(null);
     });
 
-    socket.on("user-joined", (data: { userCount: number }) => {
+    socket.on("user-joined", (data: { userCount: number; users: UserInfo[] }) => {
       setUserCount(data.userCount);
+      if (data.users) {
+        setUsers(data.users);
+      }
     });
 
     socket.on("user-left", (data: { userCount: number; users: UserInfo[] }) => {
@@ -127,7 +141,7 @@ export default function FileShare({ roomId, embedded }: FileShareProps) {
     });
 
     return () => {
-      socket.off("connect");
+      socket.off("connect", joinRoom);
       socket.off("disconnect");
       socket.off("file-room-data");
       socket.off("file-update");

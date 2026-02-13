@@ -161,6 +161,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
   const createPeerConnectionForPeer = useCallback((peerId: string, userName: string, userColor: string): PeerState => {
     const existing = peersRef.current.get(peerId);
+    let savedCandidates: RTCIceCandidateInit[] = [];
     if (existing) {
       // Don't replace an already-connected peer
       if (existing.connectionStatus === "connected") {
@@ -168,6 +169,8 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
         existing.userColor = userColor || existing.userColor;
         return existing;
       }
+      // Preserve pending ICE candidates from the old peer so they aren't lost
+      savedCandidates = [...existing.pendingCandidates];
       if (existing.connectionTimeout) clearTimeout(existing.connectionTimeout);
       existing.pc.close();
     }
@@ -269,6 +272,11 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
     peersRef.current.set(peerId, peerState);
 
+    // Restore pending candidates from a replaced peer
+    if (savedCandidates.length > 0) {
+      peerState.pendingCandidates.push(...savedCandidates);
+    }
+
     // Drain any ICE candidates that arrived before this peer was created
     const buffered = earlyIceCandidates.current.get(peerId);
     if (buffered && buffered.length > 0) {
@@ -324,12 +332,15 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
         if (!mountedRef.current) return;
 
+        // Only create PCs for users where we are the offerer (our ID < their ID).
+        // For users where their ID < ours, they will send us an offer and
+        // the webrtc-offer handler will create the PC at that point.
+        // This avoids "phantom" PCs that get destroyed when the real offer arrives,
+        // which was causing ICE candidate loss and failed connections with 3+ peers.
         const otherUsers = data.users.filter(u => u.id !== data.userInfo.id);
         for (const targetUser of otherUsers) {
-          const peerState = createPeerConnectionForPeer(targetUser.id, targetUser.name, targetUser.color);
-
-          // Deterministic offerer: smaller socket ID creates offer
           if (data.userInfo.id < targetUser.id && localStreamRef.current) {
+            const peerState = createPeerConnectionForPeer(targetUser.id, targetUser.name, targetUser.color);
             try {
               const offer = await peerState.pc.createOffer();
               await peerState.pc.setLocalDescription(offer);
@@ -352,10 +363,10 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
         const currentInfo = userInfoRef.current;
         if (!currentInfo || data.user.id === currentInfo.id) return;
 
-        const peerState = createPeerConnectionForPeer(data.user.id, data.user.name, data.user.color);
-
-        // Deterministic offerer: smaller socket ID creates offer
+        // Only create PC and offer if we're the offerer (our ID < their ID).
+        // Otherwise, wait for their offer via the webrtc-offer handler.
         if (currentInfo.id < data.user.id && localStreamRef.current) {
+          const peerState = createPeerConnectionForPeer(data.user.id, data.user.name, data.user.color);
           try {
             const offer = await peerState.pc.createOffer();
             await peerState.pc.setLocalDescription(offer);
@@ -376,7 +387,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
         removePeer(data.userId);
       });
 
-      socket.on("webrtc-offer", async (data: { fromId: string; fromName: string; offer: RTCSessionDescriptionInit }) => {
+      socket.on("webrtc-offer", async (data: { fromId: string; fromName: string; fromColor?: string; offer: RTCSessionDescriptionInit }) => {
         if (!mountedRef.current) return;
 
         if (!localStreamRef.current) {
@@ -387,7 +398,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
           }
         }
 
-        const peerState = createPeerConnectionForPeer(data.fromId, data.fromName, "");
+        const peerState = createPeerConnectionForPeer(data.fromId, data.fromName, data.fromColor || "");
         try {
           await peerState.pc.setRemoteDescription(new RTCSessionDescription(data.offer));
 

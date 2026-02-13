@@ -359,6 +359,7 @@ io.on("connection", (socket) => {
       socket.to(data.targetId).emit("webrtc-offer", {
         fromId: socket.id,
         fromName: userInfo.name,
+        fromColor: userInfo.color,
         offer: data.offer,
       });
     } catch (err) {
