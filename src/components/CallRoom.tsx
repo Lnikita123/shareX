@@ -601,13 +601,17 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
         ? "waiting"
         : "active";
 
-  // Compute grid class based on tile count (local + peers)
-  const tileCount = 1 + peerStates.size;
-  const gridClass =
-    tileCount <= 1 ? "grid-cols-1" :
-    tileCount === 2 ? "grid-cols-1 sm:grid-cols-2" :
-    tileCount <= 4 ? "grid-cols-2" :
-    "grid-cols-2 sm:grid-cols-3";
+  const peerEntries = Array.from(peerStates.entries());
+
+  // Compute grid layout for video tiles (Google Meet style)
+  const totalTiles = 1 + Math.max(1, peerEntries.length);
+  const { gridCols, gridRows } = (() => {
+    if (totalTiles <= 1) return { gridCols: 1, gridRows: 1 };
+    if (totalTiles === 2) return { gridCols: 2, gridRows: 1 };
+    if (totalTiles <= 4) return { gridCols: 2, gridRows: Math.ceil(totalTiles / 2) };
+    if (totalTiles <= 6) return { gridCols: 3, gridRows: 2 };
+    return { gridCols: 3, gridRows: Math.ceil(totalTiles / 3) };
+  })();
 
   // Ref callback for remote video elements
   const setVideoRef = (peerId: string) => (el: HTMLVideoElement | null) => {
@@ -629,10 +633,8 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
     }
   };
 
-  const peerEntries = Array.from(peerStates.entries());
-
   return (
-    <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#0a0a0f] flex flex-col`}>
+    <div className={`${embedded ? "h-full" : "h-screen"} bg-[#0a0a0f] flex flex-col overflow-hidden`}>
       {/* Header - hidden in embedded mode */}
       {!embedded && (
       <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-[#12121a] border-b border-white/5">
@@ -701,9 +703,9 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
       )}
 
       {/* Main Content */}
-      <div className="flex-1 flex relative overflow-hidden">
+      <div className="flex-1 flex relative overflow-hidden min-h-0">
         {/* Video/Audio Area */}
-        <div className={`flex-1 flex flex-col ${showChat ? "hidden sm:flex sm:w-2/3 lg:w-3/4" : "w-full"}`}>
+        <div className={`flex-1 flex flex-col min-h-0 ${showChat ? "sm:w-2/3 lg:w-3/4" : "w-full"}`}>
           {/* Floating Emojis */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
             {floatingEmojis.map((fe) => (
@@ -745,11 +747,20 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
           {/* Video Grid */}
           {overallStatus !== "error" && (
-            <div className="flex-1 p-3 sm:p-6">
+            <div className="flex-1 min-h-0 p-2 sm:p-3">
               {callType === "video" ? (
-                <div className={`h-full grid ${gridClass} gap-3 sm:gap-4`}>
+                <div
+                  className={`h-full grid gap-2 sm:gap-3 ${totalTiles === 2 ? 'grid-cols-1 sm:grid-cols-2' : ''}`}
+                  style={totalTiles === 2
+                    ? { gridAutoRows: 'minmax(0, 1fr)' }
+                    : {
+                        gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
+                        gridTemplateRows: `repeat(${gridRows}, minmax(0, 1fr))`,
+                      }
+                  }
+                >
                   {/* Local tile */}
-                  <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
+                  <div className="relative bg-black rounded-xl overflow-hidden">
                     <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
                     {!isStreamReady && (
                       <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
@@ -774,7 +785,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
                   {/* Remote tiles */}
                   {peerEntries.map(([peerId, peer]) => (
-                    <div key={peerId} className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
+                    <div key={peerId} className="relative bg-gray-900 rounded-xl overflow-hidden">
                       <video
                         ref={setVideoRef(peerId)}
                         autoPlay
@@ -801,7 +812,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
                   {/* Waiting placeholder when no peers */}
                   {peerEntries.length === 0 && (
-                    <div className="relative aspect-video bg-gray-900 rounded-xl overflow-hidden">
+                    <div className="relative bg-gray-900 rounded-xl overflow-hidden">
                       <div className="w-full h-full flex items-center justify-center">
                         <div className="text-center">
                           <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-violet-600 flex items-center justify-center animate-pulse">
@@ -880,7 +891,7 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
           )}
 
           {/* Controls */}
-          <div className="p-4 sm:p-6 flex justify-center items-center gap-3 sm:gap-4 bg-[#12121a]/80">
+          <div className="flex-shrink-0 p-3 sm:p-4 flex justify-center items-center gap-3 sm:gap-4 bg-[#12121a]">
             <button
               onClick={toggleAudio}
               className={`p-3 sm:p-4 rounded-full transition-colors ${isAudioEnabled ? "bg-white/10 hover:bg-white/20" : "bg-red-600"}`}
@@ -970,10 +981,10 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
 
         {/* Chat Sidebar */}
         {showChat && (
-          <div className="w-full sm:w-1/3 lg:w-1/4 min-w-[280px] bg-[#12121a] border-l border-white/5 flex flex-col">
+          <div className="absolute inset-0 z-30 sm:relative sm:inset-auto sm:z-auto w-full sm:w-1/3 lg:w-1/4 sm:min-w-[280px] bg-[#12121a] sm:border-l border-white/5 flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
               <h3 className="font-semibold text-white">Chat</h3>
-              <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-white p-1 sm:hidden">
+              <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-white p-1">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
