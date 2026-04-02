@@ -20,12 +20,12 @@ export const getSocket = (): Socket => {
     setConnectionState("connecting");
 
     socket = io(serverUrl, {
-      transports: ["websocket", "polling"],
+      transports: ["websocket"],
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 10000,
-      timeout: 10000,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 5000,
     });
 
     socket.on("connect", () => {
@@ -36,7 +36,8 @@ export const getSocket = (): Socket => {
       setConnectionState("disconnected");
     });
 
-    socket.on("connect_error", () => {
+    socket.on("connect_error", (err) => {
+      console.log("connect_error:", err?.message || err);
       setConnectionState("error");
     });
 
