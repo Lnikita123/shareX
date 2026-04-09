@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { getConnectionState, onConnectionStateChange, reconnectSocket } from "@/lib/socket";
 
 export default function ConnectionStatus() {
-  const [state, setState] = useState<"connecting" | "connected" | "disconnected" | "error">("disconnected");
+  const [state, setState] = useState<"connecting" | "connected" | "disconnected" | "error" | "warming-up">("disconnected");
 
   useEffect(() => {
     setState(getConnectionState());
@@ -17,6 +17,15 @@ export default function ConnectionStatus() {
       <div className="flex items-center gap-1.5 text-xs text-gray-400">
         <span className="w-2 h-2 rounded-full bg-emerald-500" />
         <span className="hidden sm:inline">Connected</span>
+      </div>
+    );
+  }
+
+  if (state === "warming-up") {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-orange-400">
+        <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+        <span className="hidden sm:inline">Starting server...</span>
       </div>
     );
   }

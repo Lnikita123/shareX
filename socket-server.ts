@@ -119,6 +119,20 @@ const rooms: Map<string, RoomData> = new Map();
 
 // Create HTTP server
 const httpServer = createServer((req, res) => {
+  const allowedOrigins = getAllowedOrigins();
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || allowedOrigins.includes("*"))) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   // Health check endpoint for Render
   if (req.url === "/health" || req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -158,7 +172,7 @@ const io = new SocketIOServer(httpServer, {
     credentials: true,
   },
   maxHttpBufferSize: MAX_FILE_SIZE + 1024 * 100,
-  pingTimeout: 20000,
+  pingTimeout: 30000,
   pingInterval: 10000,
 });
 
