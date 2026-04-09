@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getSocket, waitForConnection } from "@/lib/socket";
+import { waitForConnection } from "@/lib/socket";
 import { getIceServers } from "@/lib/webrtc-config";
 import ConnectionStatus from "./ConnectionStatus";
 import type { Socket } from "socket.io-client";
@@ -398,6 +398,19 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
           }
         }
 
+        const currentInfo = userInfoRef.current;
+
+        // Handle glare: both sides sent offers simultaneously.
+        // The peer with the higher ID yields and accepts the incoming offer.
+        const existing = peersRef.current.get(data.fromId);
+        if (existing && existing.pc.signalingState === "have-local-offer") {
+          if (currentInfo && currentInfo.id < data.fromId) {
+            // We have lower ID — ignore incoming offer, keep our offer
+            return;
+          }
+          // We have higher ID — yield: close our PC and accept their offer
+        }
+
         const peerState = createPeerConnectionForPeer(data.fromId, data.fromName, data.fromColor || "");
         try {
           await peerState.pc.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -424,6 +437,8 @@ export default function CallRoom({ roomId, callType, embedded, onEndCall }: Call
       socket.on("webrtc-answer", async (data: { fromId: string; answer: RTCSessionDescriptionInit }) => {
         const peer = peersRef.current.get(data.fromId);
         if (!peer) return;
+        // Only accept answers when we're expecting one (we sent an offer)
+        if (peer.pc.signalingState !== "have-local-offer") return;
         try {
           await peer.pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           for (const candidate of peer.pendingCandidates) {

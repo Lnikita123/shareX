@@ -1,36 +1,132 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CodeNest
 
-## Getting Started
+Real-time collaborative platform for code editing, file sharing, and audio/video calls. No sign-up required.
 
-First, run the development server:
+**Live:** [share-nikita.vercel.app](https://share-nikita.vercel.app)
+
+## Features
+
+- **Code Editor** — Real-time collaborative editing powered by Monaco Editor with syntax highlighting for 19+ languages, cursor tracking, and text selection sync
+- **File Sharing** — Share files up to 4MB with anyone in the room
+- **Audio/Video Calls** — WebRTC-based mesh calls with up to 6 peers, emoji reactions, and screen sharing
+- **Chat** — In-room messaging across all modes
+- **No Sign-Up** — Generate a random display name or choose your own, then share the room link
+
+## Tech Stack
+
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, Monaco Editor
+- **Real-time:** Socket.IO (polling + WebSocket upgrade)
+- **Calls:** WebRTC with TURN server support
+- **Deployment:** Vercel (frontend) + Render (socket server)
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 18+
+- npm
+
+### Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Install dependencies
+npm install
+
+# Copy environment config
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Running
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Start both the Next.js frontend and socket server:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# Option 1: Run both together (uses server.ts)
+npm run dev
 
-## Learn More
+# Option 2: Run separately
+npm run dev:next    # Next.js on port 3000
+npm run dev:socket  # Socket server on port 3001
+```
 
-To learn more about Next.js, take a look at the following resources:
+If running separately, set in `.env.local`:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```env
+NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Open [http://localhost:3000](http://localhost:3000) to use the app.
 
-## Deploy on Vercel
+### Optional: TURN Server
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+For reliable WebRTC calls behind NATs/firewalls, add TURN credentials to `.env.local`:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```env
+NEXT_PUBLIC_TURN_USERNAME=your_username
+NEXT_PUBLIC_TURN_CREDENTIAL=your_credential
+```
+
+Free TURN servers available at [metered.ca](https://www.metered.ca/).
+
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for full production deployment instructions.
+
+### Quick Overview
+
+| Component | Platform | URL |
+|-----------|----------|-----|
+| Frontend | Vercel | `share-nikita.vercel.app` |
+| Socket Server | Render | `codeshare-socket.onrender.com` |
+
+### Key Environment Variables
+
+**Vercel (Frontend):**
+
+| Variable | Value |
+|----------|-------|
+| `NEXT_PUBLIC_SOCKET_URL` | `https://codeshare-socket.onrender.com` |
+| `NEXT_PUBLIC_TURN_USERNAME` | *(optional)* TURN credentials |
+| `NEXT_PUBLIC_TURN_CREDENTIAL` | *(optional)* TURN credentials |
+
+**Render (Socket Server):**
+
+| Variable | Value |
+|----------|-------|
+| `PORT` | `10000` (Render default) |
+| `ALLOWED_ORIGINS` | `https://share-nikita.vercel.app` |
+
+## Project Structure
+
+```
+├── src/
+│   ├── app/
+│   │   ├── page.tsx              # Home page (room creation/joining)
+│   │   └── [roomId]/page.tsx     # Room page with tab navigation
+│   ├── components/
+│   │   ├── CodeEditor.tsx        # Monaco-based collaborative editor
+│   │   ├── FileShare.tsx         # File upload/download
+│   │   ├── CallRoom.tsx          # WebRTC mesh video/audio
+│   │   ├── VideoCall.tsx         # 1-to-1 call component
+│   │   ├── ChatSidebar.tsx       # In-room chat UI
+│   │   ├── ConnectionStatus.tsx  # Socket connection indicator
+│   │   └── UsernameModal.tsx     # Display name input
+│   └── lib/
+│       ├── socket.ts             # Socket.IO client singleton
+│       └── user-context.tsx      # Username context (localStorage)
+├── socket-server.ts              # Socket.IO server (standalone)
+├── server.ts                     # Combined dev server
+└── .env.example                  # Environment variable template
+```
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start combined dev server |
+| `npm run dev:next` | Start Next.js only |
+| `npm run dev:socket` | Start socket server only |
+| `npm run build` | Production build |
+| `npm run start` | Start production server |
+| `npm run start:socket` | Start production socket server |
+| `npm run lint` | Run ESLint |
